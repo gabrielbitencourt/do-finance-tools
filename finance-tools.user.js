@@ -4,11 +4,11 @@
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.js
-// @include      *dugout-online.com/home/none/Free-online-football-manager-game
-// @include      *dugout-online.com/finances/*
-// @homepage https://github.com/gabrielbitencourt/do-finance-tools
-// @downloadURL https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
-// @updateURL https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
+// @include      http*dugout-online.com/home/*
+// @include      http*dugout-online.com/finances/*
+// @homepage     https://github.com/gabrielbitencourt/do-finance-tools
+// @downloadURL  https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
+// @updateURL    https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
 
 const seasons_starts = {
@@ -70,7 +70,6 @@ const parseNumbers = (n) => parseInt(n.split(' ')[0].replace(/\./g, ''));
 const updateInfo = async (dom) =>
 {
     const elements = [...dom.querySelectorAll('td')].map(el => el.innerText.trim()).filter(e => e);
-    console.log(elements);
     const save = elements.reduce((acc, _, index, arr) =>
     {
         const indexInfo = indexes[index];
@@ -89,7 +88,6 @@ const updateInfo = async (dom) =>
 
     const currentSeason = parseInt(dom.querySelector('div.window_dialog_header').innerText.split(' ')[1]);
     await seasons.put({ initial_balance: save.initial_balance, id: currentSeason });
-    
     await finances.put({
         season_id: currentSeason,
         date: new Date().toISOString().split('T')[0],
@@ -98,7 +96,7 @@ const updateInfo = async (dom) =>
 }
 
 (async function() {
-    
+    console.log(window.location.pathname);
     switch (window.location.pathname) {
         case '/home/none/Free-online-football-manager-game':
             const response = await fetch("https://www.dugout-online.com/finances/none/", { method: 'GET' });
