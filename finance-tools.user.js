@@ -6,6 +6,9 @@
 // @require      https://unpkg.com/dexie/dist/dexie.js
 // @include      *dugout-online.com/home/none/Free-online-football-manager-game
 // @include      *dugout-online.com/finances/*
+// @homepage https://github.com/gabrielbitencourt/do-finance-tools
+// @downloadURL https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
+// @updateURL https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
 
 const seasons_starts = {
@@ -15,6 +18,8 @@ const seasons_starts = {
 /**
  * @typedef {import('dexie').Dexie} Dexie
  * @typedef {import('dexie').Table} Table
+ * @typedef {{ id: number, initial_balance: number }} Season
+ * @typedef {{ season_id: number, date: number, current: number, total_players_salary: number, total_coaches_salary: number, current_players_salary: number, current_coaches_salary: number, building: number, tickets: number, transfers: number, sponsor: number, prizes: number, maintenance: number, others:number }} Finance
  */
 
 const parser = new window.DOMParser();
@@ -23,9 +28,9 @@ const parser = new window.DOMParser();
  * @type {Dexie}
  */
 const db = new Dexie("DOFinanceDatabase");
-db.version(1).stores({
-    season: '&id,intial_balance',
-    finance: 'season_id,date,current,total_players_salary,total_coaches_salary,current_players_salary,current_coaches_salary,building,tickets,transfers,sponsor,prizes,maintenance,others'
+db.version(2).stores({
+    season: '&id',
+    finance: '[season_id+date]'
 });
 
 /** @type {Table} */
@@ -56,21 +61,25 @@ const indexes = {
  * @param {string} n
  * @returns {number}
  */
-const parseNumbers = (n) => parseInt(n.split(' ')[0].replace(/\./, ''));
+const parseNumbers = (n) => parseInt(n.split(' ')[0].replace(/\./g, ''));
 
+/**
+ * 
+ * @param {Document} dom 
+ */
 const updateInfo = async (dom) =>
 {
-    
     const elements = [...dom.querySelectorAll('td')].map(el => el.innerText.trim()).filter(e => e);
+    console.log(elements);
     const save = elements.reduce((acc, _, index, arr) =>
     {
         const indexInfo = indexes[index];
         if (indexInfo)
         {
-            acc[indexInfo[0]] = parseNumbers(arr[1]);
+            acc[indexInfo[0]] = parseNumbers(arr[indexInfo[1]]);
             if (indexInfo.length > 2)
             {
-                const splitted = arr[3].split(' ');
+                const splitted = arr[indexInfo[3]].split(' ');
                 acc[indexInfo[2]] = parseNumbers(splitted[splitted.length - 2]);
             }
 
@@ -80,11 +89,12 @@ const updateInfo = async (dom) =>
 
     const currentSeason = parseInt(dom.querySelector('div.window_dialog_header').innerText.split(' ')[1]);
     await seasons.put({ initial_balance: save.initial_balance, id: currentSeason });
-    /**
-     * @type {{ id: number,initial_balance: number }[]}
-     */
-    const allSeasons = await seasons.toArray();
-    console.log(allSeasons);
+    
+    await finances.put({
+        season_id: currentSeason,
+        date: new Date().toISOString().split('T')[0],
+        ...save
+    });
 }
 
 (async function() {

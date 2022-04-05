@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "dexie": "^3.2.1"
+  }
+}
