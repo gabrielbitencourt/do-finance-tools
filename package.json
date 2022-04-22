@@ -1,5 +1,6 @@
 {
   "devDependencies": {
-    "dexie": "^3.2.1"
+    "dexie": "^3.2.1",
+    "echarts": "^5.3.2"
   }
 }
