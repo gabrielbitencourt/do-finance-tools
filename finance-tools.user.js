@@ -102,7 +102,7 @@ const countMondays = (d0, d1) => {
  */
 const crawlInfos = async (dom) => {
     const elements = [...dom.querySelectorAll('td')].map(el => el.innerText.trim()).filter(e => e);
-    const save = elements.reduce((acc, _, index, arr) => {
+    const infos = elements.reduce((acc, _, index, arr) => {
         const indexInfo = indexes[index];
         if (indexInfo) {
             acc[indexInfo[0]] = parseNumbers(arr[indexInfo[1]]);
@@ -110,13 +110,13 @@ const crawlInfos = async (dom) => {
                 const splitted = arr[indexInfo[3]].split(' ');
                 acc[indexInfo[2]] = parseNumbers(splitted[splitted.length - 2]);
             }
-
         }
         return acc;
     }, {});
 
     const currentSeason = parseInt(dom.querySelector('div.window_dialog_header').innerText.split(' ')[1]);
-    await seasons.put({ initial_balance: save.initial_balance, id: currentSeason });
+    const { initial_balance, ...save } = infos;
+    await seasons.put({ initial_balance: initial_balance, id: currentSeason });
     await finances.put({
         season_id: currentSeason,
         date: serverDateString(),
@@ -365,13 +365,13 @@ const predictFinances = async (infos) =>
             current_players_salary: reference.current_players_salary,
             current_coaches_salary: reference.current_coaches_salary,
             building: last.building,
-            tickets: last.tickets + (day.getDay() === 1 ? averageTickets : 0) + (futureMatchesDates[serverDateString(day)] ? averageTickets : 0),
+            tickets: last.tickets + (day.getDay() === 1 ? averageTickets : 0) + (day.getDay() !== 1 && futureMatchesDates[serverDateString(day)] ? averageTickets : 0),
             transfers: last.transfers,
             sponsor: last.sponsor + dailySponsor,
             prizes: last.prizes,
             maintenance: last.maintenance - (day.getDay() === 1 ? getLastMaintenance(past) : 0),
             others: last.others + (day.getDay() === 1 ? getAverageOthers(past) : 0),
-            current: last.current + dailySponsor - (day.getDay() === 1 ? mondayExpenses - averageTickets : 0) + (futureMatchesDates[serverDateString(day)] ? averageTickets : 0),
+            current: last.current + dailySponsor - (day.getDay() === 1 ? mondayExpenses - averageTickets : 0) + (day.getDay() !== 1 && futureMatchesDates[serverDateString(day)] ? averageTickets : 0),
         });
         day.setDate(day.getDate() + 1);
     }
@@ -897,6 +897,33 @@ const updateFinanceUI = async () => {
     $(frame).tabs();
 }
 
+const map = ['date', 'servertime', 'season_id', 'current', 'total_players_salary', 'total_coaches_salary', 'current_players_salary', 'current_coaches_salary', 'building', 'tickets', 'transfers', 'sponsor', 'prizes', 'maintenance', 'others'];
+const dateEncoder = x => x.replace(':', '-').split('-').map(m => parseInt(m).toString(36)).join('-');
+const numberEncoder = x => parseInt(x).toString(36);
+
+const encodeFinances = async () =>
+{
+    const f = (await finances.toArray()).map(f => Object.entries(f).reduce((acc, [k, v]) =>
+    {
+        const i = map.indexOf(k);
+        if (i >= 0) acc[i] = i > 1 ? numberEncoder(v) : dateEncoder(v);
+        return acc;
+    }, []));
+    const encoded = JSON.stringify(f).replace(/\"/g, '').replace(/\],\[/g,'|').replace(/(\[\[|\]\])/g, '');
+    console.log(`encoded in ${encoded.length} characters (${Math.round(encoded.length * 8 / 1024 * 1000) / 1000} KB)`);
+    return encoded;
+}
+
+const saveAtNotepad = (notes) =>
+{
+    const response = fetch("https://www.dugout-online.com/notebook/none", {
+        "body": `savechanges=1&editedContents=${notes}`,
+        method: "POST",
+        mode: "cors",
+        credentials: "include"
+    });
+}
+
 (async function () {
     switch (window.location.pathname) {
         case '/home/none/Free-online-football-manager-game':
@@ -916,4 +943,5 @@ const updateFinanceUI = async () => {
             await updateFinanceUI();
             break;
     }
+    console.log(await encodeFinances());
 })();
