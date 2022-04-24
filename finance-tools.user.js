@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.0
+// @version      1.1
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -341,6 +341,7 @@ const correctInfos = (infos) =>
  */
 const predictFinances = async (infos) =>
 {
+    if (infos.length < 7) return [];
     const past = infos.filter(f => f.date < serverDateString());
     const reference = past[past.length - 1];
     
@@ -903,7 +904,7 @@ const numberEncoder = x => parseInt(x).toString(36);
 
 const encodeFinances = async () =>
 {
-    const f = (await finances.toArray()).map(f => Object.entries(f).reduce((acc, [k, v]) =>
+    const f = (await finances.where({ season_id: currentSeason }).toArray()).map(f => Object.entries(f).reduce((acc, [k, v]) =>
     {
         const i = map.indexOf(k);
         if (i >= 0) acc[i] = i > 1 ? numberEncoder(v) : dateEncoder(v);
@@ -914,9 +915,18 @@ const encodeFinances = async () =>
     return encoded;
 }
 
-const saveAtNotepad = (notes) =>
+const decodeFinances = async () =>
 {
-    const response = fetch("https://www.dugout-online.com/notebook/none", {
+    const response = await fetch("https://www.dugout-online.com/notebook/none", { method: "GET" });
+    const dom = parser.parseFromString(await response.text(), 'text/html');
+    const value = dom.querySelector('textarea.textfield[name="editedContents"]').value.split("DOFinanceTools\n=====")[1];
+    if (!value) return;
+    return value.split('|').map(line => line.split(',').map((v, i) => i > 1 ? parseInt(v, 36) : v.split('-').map(d => d === 'null' ? '00:00' : formatNumbers(parseInt(d, 36)).replace('.', '')).join(i === 0 ? '-' : ':')).reduce((acc, value, i) => ({ ...acc, [map[i]]: value }), {}));
+}
+
+const saveAtNotepad = async (notes) =>
+{
+    const response = await fetch("https://www.dugout-online.com/notebook/none", {
         "body": `savechanges=1&editedContents=${notes}`,
         method: "POST",
         mode: "cors",
@@ -925,6 +935,8 @@ const saveAtNotepad = (notes) =>
 }
 
 (async function () {
+    const decoded = await decodeFinances();
+    // finances.bulkPut(decoded);
     switch (window.location.pathname) {
         case '/home/none/Free-online-football-manager-game':
             const response = await fetch("https://www.dugout-online.com/finances/none/", { method: 'GET' });
@@ -943,5 +955,6 @@ const saveAtNotepad = (notes) =>
             await updateFinanceUI();
             break;
     }
-    console.log(await encodeFinances());
+    const encoded = await encodeFinances();
+    // await saveAtNotepad(encoded);
 })();
