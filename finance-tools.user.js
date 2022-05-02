@@ -57,6 +57,9 @@ const finances = db.finance;
 /** @type {Table} */
 const events = db.events;
 
+/** @type {echarts.ECharts} */
+let echartsContainer;
+
 /**
  * @type {Object.<number, (string | number)[]>}
  */
@@ -163,7 +166,7 @@ const crawlMatches = async (season, past = false) => {
 
 const crawlTransfers = async () =>
 {
-    if (localStorage.getItem('last_transfers_crawl') === serverDateString()) return;
+    // if (localStorage.getItem('last_transfers_crawl') === serverDateString()) return;
     const lastDate = (await events.where('type').equals(eventTypes.MATCH).last())?.date;
     const buys = [];
     const sells = [];
@@ -189,10 +192,12 @@ const crawlTransfers = async () =>
     {
         response = await fetch(page, { method: 'GET' });
         dom = parser.parseFromString(await response.text(), 'text/html');
-        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.onclick.toString()).reverse()
-        
+
+        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.getAttribute('onclick').split('\'')[1]).reverse()
+
         buys.push(...[...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {})));
-    } while (page = pagesLeft.pop() && (!lastDate || buys[buys.length - 1].date <= lastDate));
+        page = pagesLeft.pop();
+    } while (page && (!lastDate || buys[buys.length - 1].date <= lastDate));
 
     pagesLeft = undefined;
     page = `https://www.dugout-online.com/clubinfo/transfers/clubid/none/typ/2/pg/1`;
@@ -200,10 +205,11 @@ const crawlTransfers = async () =>
     {
         response = await fetch(page, { method: 'GET' });
         dom = parser.parseFromString(await response.text(), 'text/html');
-        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.onclick.toString()).reverse()
+        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.getAttribute('onclick').split('\'')[1]).reverse()
 
         sells.push(...[...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.SELL : undefined) }), {})));
-    } while (page = pagesLeft.pop() && (!lastDate || sells[sells.length - 1].date <= lastDate));
+        page = pagesLeft.pop()
+    } while (page && (!lastDate || sells[sells.length - 1].date <= lastDate));
 
     localStorage.setItem('last_transfers_crawl', serverDateString());
     await events.bulkPut([...buys, ...sells]);
@@ -265,15 +271,10 @@ const correctInfos = (infos) =>
         if (index === infos.length - 1)
         {
             corrected.push(info);
-            // predict future
             break;
         }
         const next = infos[index + 1];
-        if (info.date === next.date)
-        {
-            // merge
-            continue;
-        }
+        if (info.date === next.date) continue;
         
         const diff = new Date(next.date).getTime() - new Date(info.date).getTime();
         if (diff === 0 || diff === 86400000) corrected.push(info);
@@ -339,20 +340,18 @@ const correctInfos = (infos) =>
  * @param {Finance[]} infos
  * @return {Finance[]}
  */
-const predictFinances = async (infos) =>
+const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
 {
     if (infos.length < 7) return [];
-    const past = infos.filter(f => f.date < serverDateString());
+    const past = infos.filter(f => f.date <= serverDateString());
     const reference = past[past.length - 1];
     
-    const dailySponsor = getDailySponsor(past);
-    const averageTickets = getAverageTickets(past);
-    
     const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes("-Juvenil]")).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
-    const mondayExpenses = reference.current_coaches_salary + reference.current_players_salary + getLastMaintenance(past) + getAverageOthers(past);
+    const dailySponsor = sponsor ? sponsor : getDailySponsor(past);
+    const averageHomeTickets = !isNaN(home) ? home : getAverageTickets(past);
+    const averageFriendliesTickets = !isNaN(friendlies) ? friendlies : getAverageTickets(past);
+    const mondayExpenses = monday ? monday : reference.current_coaches_salary + reference.current_players_salary + getLastMaintenance(past) - getAverageOthers(past);
 
-    // (daily sponsor * days_left) + (avg tickets * (matches_left + friendlies_count)) - (salaries + maintenance + others) * mondays_left;
-    
     const future = [];
     const day = new Date(serverDateString() + 'T00:00:00');
     while (serverDateString(day) < seasonsStarts[currentSeason + 1])
@@ -366,17 +365,17 @@ const predictFinances = async (infos) =>
             current_players_salary: reference.current_players_salary,
             current_coaches_salary: reference.current_coaches_salary,
             building: last.building,
-            tickets: last.tickets + (day.getDay() === 1 ? averageTickets : 0) + (day.getDay() !== 1 && futureMatchesDates[serverDateString(day)] ? averageTickets : 0),
+            tickets: last.tickets + (day.getDay() === 1 ? averageFriendliesTickets : 0) + (day.getDay() !== 1 && futureMatchesDates[serverDateString(day)] ? averageHomeTickets : 0),
             transfers: last.transfers,
             sponsor: last.sponsor + dailySponsor,
             prizes: last.prizes,
             maintenance: last.maintenance - (day.getDay() === 1 ? getLastMaintenance(past) : 0),
             others: last.others + (day.getDay() === 1 ? getAverageOthers(past) : 0),
-            current: last.current + dailySponsor - (day.getDay() === 1 ? mondayExpenses - averageTickets : 0) + (day.getDay() !== 1 && futureMatchesDates[serverDateString(day)] ? averageTickets : 0),
+            current: last.current + dailySponsor - (day.getDay() === 1 ? mondayExpenses - averageFriendliesTickets : 0) + (day.getDay() !== 1 && futureMatchesDates[serverDateString(day)] ? averageHomeTickets : 0),
         });
         day.setDate(day.getDate() + 1);
     }
-    return future;
+    return [future, dailySponsor, averageHomeTickets, averageFriendliesTickets, mondayExpenses];
 }
 
 const marker = (color) => `<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${color};"></span>`;
@@ -603,6 +602,43 @@ const setupInfos = async (currentSeason, infos) => {
 
 /**
  * 
+ * @param {number} season_id
+ * @param {HTMLDivElement} container 
+ */
+const setupEcharts = async (season_id, container) =>
+{
+    const infos = await finances.where({ season_id }).toArray();
+    const correctedInfos = correctInfos(infos);
+    const projections = await projectFinances(correctedInfos);
+    echartsContainer = echarts.init(container)
+    echartsContainer.setOption(setupChart(correctedInfos, projections[0].slice(1)));
+
+    const inputDiv = document.createElement('div');
+    inputDiv.style.display = 'flex';
+    inputDiv.style.textAlign = 'left';
+
+    const sponsorInput = setupInput('Patrocínio diário', projections[1]);
+    const ticketsInput = setupInput('Bilheteria em casa', projections[2]);
+    const friendliesInput = setupInput('Bilheteria amistosos', projections[3]);
+    const mondayInput = setupInput('Despesas de segunda', projections[4]);
+
+    inputDiv.appendChild(sponsorInput);
+    inputDiv.appendChild(ticketsInput);
+    inputDiv.appendChild(friendliesInput);
+    inputDiv.appendChild(mondayInput);
+
+    const btn = document.createElement('button');
+    btn.innerText = 'Atualizar';
+    btn.onclick = async () =>
+    {
+        echartsContainer.setOption(setupChart(correctedInfos, (await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber))[0].slice(1)), true);
+    };
+    inputDiv.appendChild(btn);
+    container.parentElement.appendChild(inputDiv);
+}
+
+/**
+ * 
  * @param {Finance[]} rawData
  * @returns {EChartsOption}
  */
@@ -617,7 +653,6 @@ const setupChart = (rawData, projections = []) => {
         }
         return false;
     }).concat(projections);
-    console.log(data);
 
     const salarios = data.map((d, i, arr) => i != 0 ? d.total_players_salary + d.total_coaches_salary != arr[i - 1].total_players_salary + arr[i - 1].total_coaches_salary ? (d.current_players_salary + d.current_coaches_salary) : undefined : undefined);
     const contrucoes = data.map((d, i, arr) => i != 0 ? d.building != arr[i - 1].building ? d.building : undefined : undefined);
@@ -849,6 +884,26 @@ const setupChart = (rawData, projections = []) => {
     };
 }
 
+const setupInput = (name, value) =>
+{
+    const div = document.createElement('div');
+    div.style.display = 'flex';
+    div.style.flexDirection = 'column';
+    div.style.marginRight = '4px';
+
+    const input = document.createElement('input');
+    input.placeholder = name;
+    input.type = 'number';
+    input.value = value;
+    input.style.maxWidth = '120px';
+
+    const label = document.createElement('label');
+    label.innerText = name;
+    div.appendChild(label);
+    div.appendChild(input);
+    return div;
+}
+
 const updateFinanceUI = async () => {
     const currentSeason = parseInt(document.querySelector('div.window_dialog_header').innerText.split(' ')[1]);
     /**
@@ -865,9 +920,8 @@ const updateFinanceUI = async () => {
     ech.style.height = '500px';
 
     currentSeasonTab.appendChild(ech);
-    const correctedInfos = correctInfos(await finances.where({ season_id: currentSeason }).toArray());
-    const predictions = await predictFinances(correctedInfos);
-    echarts.init(ech).setOption(setupChart(correctedInfos, predictions.slice(1)));
+    setupEcharts(currentSeason, ech);
+
     frame.removeChild(currentSeasonTab);
 
     const tabs = document.createElement('ul');
@@ -919,7 +973,9 @@ const decodeFinances = async () =>
 {
     const response = await fetch("https://www.dugout-online.com/notebook/none", { method: "GET" });
     const dom = parser.parseFromString(await response.text(), 'text/html');
-    const value = dom.querySelector('textarea.textfield[name="editedContents"]').value.split("DOFinanceTools\n=====")[1];
+    const textarea = dom.querySelector('textarea.textfield[name="editedContents"]');
+    if (!textarea) return;
+    const value = textarea.value.split("DOFinanceTools\n=====")[1];
     if (!value) return;
     return value.split('|').map(line => line.split(',').map((v, i) => i > 1 ? parseInt(v, 36) : v.split('-').map(d => d === 'null' ? '00:00' : formatNumbers(parseInt(d, 36)).replace('.', '')).join(i === 0 ? '-' : ':')).reduce((acc, value, i) => ({ ...acc, [map[i]]: value }), {}));
 }
@@ -936,7 +992,15 @@ const saveAtNotepad = async (notes) =>
 
 (async function () {
     const decoded = await decodeFinances();
-    // finances.bulkPut(decoded);
+    if (decoded)
+    {
+        // options to enable/disable sync
+        // finances.bulkPut(decoded);
+    }
+    else
+    {
+        // message to say sync is only available for premium users
+    }
     switch (window.location.pathname) {
         case '/home/none/Free-online-football-manager-game':
             const response = await fetch("https://www.dugout-online.com/finances/none/", { method: 'GET' });
