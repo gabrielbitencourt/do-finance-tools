@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.1
+// @version      1.2
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -42,11 +42,32 @@ const formatter = new Intl.NumberFormat('pt-BR', { minimumIntegerDigits: 2 });
  * @type {Dexie}
  */
 const db = new Dexie("DOFinanceDatabase");
-db.version(2).stores({
-    season: '&id',
-    finance: '[season_id+date+current]',
-    events: '[season_id+date+type+id],type'
-});
+db
+    .version(2)
+    .stores({
+        season: '&id',
+        finance: '[season_id+date+current]',
+        events: '[season_id+date+type+id],type'
+    });
+
+db
+    .version(3)
+    .stores({
+        season: '&id',
+        finance: '[season_id+date+current]',
+        events: '[season_id+date+type+id],type'
+    })
+    .upgrade(t =>
+        {
+            return t.events
+                .toCollection()
+                .modify(event =>
+                {
+                    if (event.type !== eventTypes.MATCH) return;
+                    event.friendly = event.name.match(/\[(.*)\]/)[1] === 'Amistoso';
+                    event.home = event.name.indexOf(document.querySelector('div.header_clubname').innerText) < event.name.match(/(vs.|\d?\d:\d?\d)/).index;
+                });
+        });
 
 /** @type {Table} */
 const seasons = db.season;
@@ -130,11 +151,13 @@ const crawlInfos = async (dom) => {
 }
 
 const crawlMatches = async (season, past = false) => {
-    if (localStorage.getItem('last_matches_crawl') === serverDateString()) return;
+    // if (localStorage.getItem('last_matches_crawl') === serverDateString()) return;
+
     const dateRange = [seasonsStarts[season], seasonsStarts[season + 1]];
     let year = past ? parseInt(dateRange[0].split('-')[0]) : serverdate.getFullYear();
     let month = past ? parseInt(dateRange[0].split('-')[1]) : serverdate.getMonth() + 1;
 
+    const clubName = document.querySelector('div.header_clubname').innerText;
     const parsers = [
         (el) => {
             const date = el.innerText.trim().split(' ')[1].split('.').reverse().join('-');
@@ -144,7 +167,16 @@ const crawlMatches = async (season, past = false) => {
                 type: eventTypes.MATCH
             };
         },
-        (match) => ({ name: match.innerText.trim(), link: match.querySelector('a').href, id: parseInt(match.querySelector('a').href.match(/gameid\/(\d*)\//g)[0].split('/')[1]) }),
+        (match) => {
+            const matchName = match.innerText.trim();
+            return {
+                name: matchName,
+                friendly: matchName.match(/\[(.*)\]/)[1] === 'Amistoso',
+                home: matchName.indexOf(clubName) < matchName.match(/(vs.|\d?\d:\d?\d)/).index,
+                link: match.querySelector('a').href,
+                id: parseInt(match.querySelector('a').href.match(/gameid\/(\d*)\//g)[0].split('/')[1])
+            };
+        },
         (_) => ({})
     ];
     const matches = [];
@@ -162,6 +194,51 @@ const crawlMatches = async (season, past = false) => {
     }
     await events.bulkPut(matches);
     localStorage.setItem('last_matches_crawl', serverDateString());
+};
+
+const crawlAllTransfers = async (clubId = 'none') =>
+{
+    const buys = [];
+    const sells = [];
+
+    const parsers = [
+        (position) => ({ position: position.innerText.trim() }),
+        (player) => ({ name: player.innerText.trim(), link: player.querySelector('a').href, id: parseInt(player.querySelector('a').href.split('/').reverse()[0]) }),
+        (team) => ({ team: team.innerText.trim() }),
+        (el, type) => {
+            const date = el.innerText.trim().split('.').reverse().join('-');
+            return {
+                date,
+                type,
+                season_id: parseInt(Object.entries(seasonsStarts).find(([_, v], index, entries) => date >= v && (index === entries.length - 1 || date < entries[index + 1][1]))[0])
+            };
+        },
+        (price) => ({ price: parseInt(price.innerText.trim().split(' ')[0].replace(/\./, '')) })
+    ];
+
+    const pageBuys = fetch(`https://www.dugout-online.com/clubinfo/transfers/clubid/${clubId}/typ/1/pg/1`, { method: 'GET' }).then(res => ({ res, type: eventTypes.BUY }));
+    const pageSells = fetch(`https://www.dugout-online.com/clubinfo/transfers/clubid/${clubId}/typ/2/pg/1`, { method: 'GET' }).then(res => ({ res, type: eventTypes.SELL }));
+
+    const pagesLeft = [];
+    for (const page of await Promise.all([pageBuys, pageSells])) {
+        pagesLeft.push(...[...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => fetch(el.getAttribute('onclick').split('\'')[1], {}).then(res => ({ res, type: page.type }))));
+
+        const dom = parser.parseFromString(await page.res.text(), 'text/html');
+        const transfers = [...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {}));
+
+        if (page.type === eventTypes.BUY) buys.push(...transfers);
+        else sells.push(...transfers);
+    }
+
+    for (const pageLeft of await Promise.all(pagesLeft))
+    {
+        const dom = parser.parseFromString(await pageLeft.res.text(), 'text/html');
+        const transfers = [...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {}));
+
+        if (page.type === eventTypes.BUY) buys.push(...transfers);
+        else sells.push(...transfers);
+    }
+    return [...buys, ...sells];
 };
 
 const crawlTransfers = async () =>
@@ -233,6 +310,21 @@ const getDelta = (infos, fields) =>
 /**
  * 
  * @param {Finance[]} infos
+ * @param {string[]} fields
+ * @returns {{ delta: number, date: string }[]}
+ */
+ const getDeltaByDate = (infos, fields) =>
+ {
+     return infos.map((info, i, arr) =>
+     {
+         if (i === 0) return undefined;
+         return { delta: fields.reduce((acc, f) => acc + info[f] - arr[i - 1][f], 0), date: info.date };
+     });
+ }
+
+/**
+ * 
+ * @param {Finance[]} infos
  * @return {number}
  */
 const getDailySponsor = (infos) => {
@@ -240,10 +332,16 @@ const getDailySponsor = (infos) => {
     return sponsors.sort((a, b) => sponsors.filter(v => v === a).length - sponsors.filter(v => v === b).length).pop();
 }
 
-const getAverageTickets = (infos) =>
+const getAverageTickets = (infos, friendlies) =>
 {
-    const tickets = getDelta(infos, ['tickets']).filter(t => t);
-    return tickets.reduce((a, b) => a + b, 0) / tickets.length;
+    const tickets = getDeltaByDate(infos, ['tickets'])
+        .filter(t =>
+        {
+            if (!t?.delta) return false;
+            return friendlies ? new Date(t.date + 'T00:00:00').getDay() === 1 : new Date(t.date + 'T00:00:00').getDay() !== 1
+        })
+        .map(d => d.delta);
+    return Math.round((tickets.reduce((a, b) => a + b, 0) / tickets.length));
 }
 
 const getLastMaintenance = (infos) =>
@@ -303,12 +401,11 @@ const correctInfos = (infos) =>
                     prizes: info.prizes,
                     maintenance: info.maintenance,
                     others: info.others
-                });                
+                });
             }
         }
         else console.error('Diferença entre datas inesperada: ', next.date, info.date, diff);
     }
-    // assure maintenance, salary and others are always on monday - DONE
     // match tickets, buys and sells (and maybe salary) with events
     return corrected.map((f, i, arr) => 
     {
@@ -346,10 +443,10 @@ const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
     const past = infos.filter(f => f.date <= serverDateString());
     const reference = past[past.length - 1];
     
-    const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes("-Juvenil]")).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
+    const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes("-Juvenil]") && m.home === true && !m.friendly).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
     const dailySponsor = sponsor ? sponsor : getDailySponsor(past);
-    const averageHomeTickets = !isNaN(home) ? home : getAverageTickets(past);
-    const averageFriendliesTickets = !isNaN(friendlies) ? friendlies : getAverageTickets(past);
+    const averageHomeTickets = !isNaN(home) ? home : getAverageTickets(past, false);
+    const averageFriendliesTickets = !isNaN(friendlies) ? friendlies : getAverageTickets(past, true);
     const mondayExpenses = monday ? monday : reference.current_coaches_salary + reference.current_players_salary + getLastMaintenance(past) - getAverageOthers(past);
 
     const future = [];
@@ -629,6 +726,20 @@ const setupEcharts = async (season_id, container) =>
 
     const btn = document.createElement('button');
     btn.innerText = 'Atualizar';
+    btn.style.cssText = `
+        text-align: center;
+        background-position: right;
+        padding-right: 4px;
+        padding-left: 4px;
+        color: #393A39;
+        font-weight: bold;
+        border: 1px solid #A4B0A3;
+        background-color: #D5E3D5;
+        -moz-border-radius: 4px 4px 4px 4px;
+        border-radius: 4px 4px 4px 4px;
+        cursor: pointer;
+        align-self: end;
+    `;
     btn.onclick = async () =>
     {
         echartsContainer.setOption(setupChart(correctedInfos, (await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber))[0].slice(1)), true);
@@ -974,7 +1085,11 @@ const decodeFinances = async () =>
     const response = await fetch("https://www.dugout-online.com/notebook/none", { method: "GET" });
     const dom = parser.parseFromString(await response.text(), 'text/html');
     const textarea = dom.querySelector('textarea.textfield[name="editedContents"]');
-    if (!textarea) return;
+    if (!textarea)
+    {
+        // message to say sync is only available for premium users
+        return;
+    }
     const value = textarea.value.split("DOFinanceTools\n=====")[1];
     if (!value) return;
     return value.split('|').map(line => line.split(',').map((v, i) => i > 1 ? parseInt(v, 36) : v.split('-').map(d => d === 'null' ? '00:00' : formatNumbers(parseInt(d, 36)).replace('.', '')).join(i === 0 ? '-' : ':')).reduce((acc, value, i) => ({ ...acc, [map[i]]: value }), {}));
@@ -982,6 +1097,9 @@ const decodeFinances = async () =>
 
 const saveAtNotepad = async (notes) =>
 {
+    // const userNotes = current content except DOFinanceTools\n=====
+    // const toSave = userNotes + notes;
+
     const response = await fetch("https://www.dugout-online.com/notebook/none", {
         "body": `savechanges=1&editedContents=${notes}`,
         method: "POST",
@@ -997,24 +1115,21 @@ const saveAtNotepad = async (notes) =>
         // options to enable/disable sync
         // finances.bulkPut(decoded);
     }
-    else
-    {
-        // message to say sync is only available for premium users
-    }
+
     switch (window.location.pathname) {
         case '/home/none/Free-online-football-manager-game':
             const response = await fetch("https://www.dugout-online.com/finances/none/", { method: 'GET' });
             const dom = parser.parseFromString(await response.text(), 'text/html');
             await crawlInfos(dom);
             await crawlMatches(currentSeason);
-            await crawlTransfers()
+            await crawlTransfers();
 
             break;
 
         default:
             await crawlInfos(document);
             await crawlMatches(currentSeason);
-            await crawlTransfers()
+            await crawlTransfers();
 
             await updateFinanceUI();
             break;
