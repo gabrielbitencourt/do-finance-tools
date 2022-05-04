@@ -353,7 +353,7 @@ const getLastMaintenance = (infos) =>
 const getAverageOthers = (infos) =>
 {
     const others = getDelta(infos, ['others']).filter(t => t);
-    return others.reduce((a, b) => a + b, 0) / others.length;
+    return Math.round(others.reduce((a, b) => a + b, 0) / others.length);
 }
 
 /**
@@ -745,7 +745,21 @@ const setupEcharts = async (season_id, container) =>
         echartsContainer.setOption(setupChart(correctedInfos, (await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber))[0].slice(1)), true);
     };
     inputDiv.appendChild(btn);
+
+    const titleVars = document.createElement('h6');
+    titleVars.innerText = 'Variáveis de projeção';
+    container.parentElement.appendChild(titleVars);
     container.parentElement.appendChild(inputDiv);
+
+    const optionsDiv = document.createElement('div');
+    optionsDiv.style.display = 'flex';
+    optionsDiv.style.textAlign = 'left';
+    
+    const titleOpts = document.createElement('h6');
+    titleOpts.innerText = 'Opções';
+
+    container.parentElement.appendChild(titleOpts);
+    container.parentElement.appendChild(optionsDiv);
 }
 
 /**
@@ -777,7 +791,6 @@ const setupChart = (rawData, projections = []) => {
     
     const xAxisData = data.map(d => d.date);
     return {
-        title: { text: 'Evolução das finanças' },
         tooltip: {
             trigger: 'axis',
             textStyle: {
@@ -1010,6 +1023,10 @@ const setupInput = (name, value) =>
 
     const label = document.createElement('label');
     label.innerText = name;
+    label.style.cssText = `
+        font-size: 12px;
+        font-weight: bold;
+    `;
     div.appendChild(label);
     div.appendChild(input);
     return div;
