@@ -13,6 +13,17 @@
 // @updateURL    https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
 
+
+let options = JSON.parse(localStorage.getItem('DOFinanceTools.options'));
+if (!options)
+{
+    options = {
+        sync: true,   // sync database between devices with notepad (premium only, non-premium does not have notepad so it won't work)
+        limiter: true // limit the number of requests to the server to once per day to gather transfers and match info (avoids unnecessary requests, only useful for development/debugging)
+    };
+    localStorage.setItem('DOFinanceTools.options', JSON.stringify(options));
+}
+
 const currentSeason = 41;
 const seasonsStarts = {
     40: '2021-09-07',
@@ -41,7 +52,7 @@ const formatter = new Intl.NumberFormat('pt-BR', { minimumIntegerDigits: 2 });
 /**
  * @type {Dexie}
  */
-const db = new Dexie("DOFinanceDatabase");
+const db = new Dexie('DOFinanceDatabase');
 db
     .version(2)
     .stores({
@@ -80,6 +91,26 @@ const events = db.events;
 
 /** @type {echarts.ECharts} */
 let echartsContainer;
+
+// CONSTS
+const syncVersionKey = 'DOFinanceTools.syncVersion';
+const lastMatchesUpdateKey = 'DOFinanceTools.lastMatchesUpdate';
+const lastTransfersUpdateKey = 'DOFinanceTools.lastTransfersUpdate';
+const btnCss = `
+    text-align: center;
+    background-position: right;
+    padding-right: 4px;
+    padding-left: 4px;
+    margin-right: 4px;
+    color: #393A39;
+    font-weight: bold;
+    border: 1px solid #A4B0A3;
+    background-color: #D5E3D5;
+    -moz-border-radius: 4px 4px 4px 4px;
+    border-radius: 4px 4px 4px 4px;
+    cursor: pointer;
+    align-self: end;
+`;
 
 /**
  * @type {Object.<number, (string | number)[]>}
@@ -151,7 +182,7 @@ const crawlInfos = async (dom) => {
 }
 
 const crawlMatches = async (season, past = false) => {
-    // if (localStorage.getItem('last_matches_crawl') === serverDateString()) return;
+    if (options.limiter && localStorage.getItem(lastMatchesUpdateKey) === serverDateString()) return;
 
     const dateRange = [seasonsStarts[season], seasonsStarts[season + 1]];
     let year = past ? parseInt(dateRange[0].split('-')[0]) : serverdate.getFullYear();
@@ -193,7 +224,7 @@ const crawlMatches = async (season, past = false) => {
         }
     }
     await events.bulkPut(matches);
-    localStorage.setItem('last_matches_crawl', serverDateString());
+    localStorage.setItem(lastMatchesUpdateKey, serverDateString());
 };
 
 const crawlAllTransfers = async (clubId = 'none') =>
@@ -243,7 +274,7 @@ const crawlAllTransfers = async (clubId = 'none') =>
 
 const crawlTransfers = async () =>
 {
-    // if (localStorage.getItem('last_transfers_crawl') === serverDateString()) return;
+    if (options.limiter && localStorage.getItem(lastTransfersUpdateKey) === serverDateString()) return;
     const lastDate = (await events.where('type').equals(eventTypes.MATCH).last())?.date;
     const buys = [];
     const sells = [];
@@ -288,7 +319,7 @@ const crawlTransfers = async () =>
         page = pagesLeft.pop()
     } while (page && (!lastDate || sells[sells.length - 1].date <= lastDate));
 
-    localStorage.setItem('last_transfers_crawl', serverDateString());
+    localStorage.setItem(lastTransfersUpdateKey, serverDateString());
     await events.bulkPut([...buys, ...sells]);
 };
 
@@ -329,6 +360,7 @@ const getDelta = (infos, fields) =>
  */
 const getDailySponsor = (infos) => {
     const sponsors = getDelta(infos, ['sponsor']).filter(n => !isNaN(n));
+    if (!sponsors.length) return 0;
     return sponsors.sort((a, b) => sponsors.filter(v => v === a).length - sponsors.filter(v => v === b).length).pop();
 }
 
@@ -341,18 +373,21 @@ const getAverageTickets = (infos, friendlies) =>
             return friendlies ? new Date(t.date + 'T00:00:00').getDay() === 1 : new Date(t.date + 'T00:00:00').getDay() !== 1
         })
         .map(d => d.delta);
+    if (!tickets.length) return 0;
     return Math.round((tickets.reduce((a, b) => a + b, 0) / tickets.length));
 }
 
 const getLastMaintenance = (infos) =>
 {
     const maintenance = getDelta(infos, ['maintenance']).filter(m => m);
+    if (!maintenance.length) return 0;
     return maintenance[maintenance.length - 1] * -1;
 }
 
 const getAverageOthers = (infos) =>
 {
     const others = getDelta(infos, ['others']).filter(t => t);
+    if (!others.length) return 0;
     return Math.round(others.reduce((a, b) => a + b, 0) / others.length);
 }
 
@@ -439,11 +474,12 @@ const correctInfos = (infos) =>
  */
 const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
 {
-    if (infos.length < 7) return [];
+    // if (infos.length < 7) return [];
     const past = infos.filter(f => f.date <= serverDateString());
+    console.log(past[0])
     const reference = past[past.length - 1];
     
-    const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes("-Juvenil]") && m.home === true && !m.friendly).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
+    const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes('-Juvenil]') && m.home === true && !m.friendly).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
     const dailySponsor = sponsor ? sponsor : getDailySponsor(past);
     const averageHomeTickets = !isNaN(home) ? home : getAverageTickets(past, false);
     const averageFriendliesTickets = !isNaN(friendlies) ? friendlies : getAverageTickets(past, true);
@@ -464,7 +500,7 @@ const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
             building: last.building,
             tickets: last.tickets + (day.getDay() === 1 ? averageFriendliesTickets : 0) + (day.getDay() !== 1 && futureMatchesDates[serverDateString(day)] ? averageHomeTickets : 0),
             transfers: last.transfers,
-            sponsor: last.sponsor + dailySponsor,
+            sponsor: last.sponsor + (serverDateString() !== serverDateString(day) ? dailySponsor : 0),
             prizes: last.prizes,
             maintenance: last.maintenance - (day.getDay() === 1 ? getLastMaintenance(past) : 0),
             others: last.others + (day.getDay() === 1 ? getAverageOthers(past) : 0),
@@ -708,7 +744,7 @@ const setupEcharts = async (season_id, container) =>
     const correctedInfos = correctInfos(infos);
     const projections = await projectFinances(correctedInfos);
     echartsContainer = echarts.init(container)
-    echartsContainer.setOption(setupChart(correctedInfos, projections[0].slice(1)));
+    echartsContainer.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []));
 
     const inputDiv = document.createElement('div');
     inputDiv.style.display = 'flex';
@@ -724,30 +760,24 @@ const setupEcharts = async (season_id, container) =>
     inputDiv.appendChild(friendliesInput);
     inputDiv.appendChild(mondayInput);
 
-    const btn = document.createElement('button');
-    btn.innerText = 'Atualizar';
-    btn.style.cssText = `
-        text-align: center;
-        background-position: right;
-        padding-right: 4px;
-        padding-left: 4px;
-        color: #393A39;
-        font-weight: bold;
-        border: 1px solid #A4B0A3;
-        background-color: #D5E3D5;
-        -moz-border-radius: 4px 4px 4px 4px;
-        border-radius: 4px 4px 4px 4px;
-        cursor: pointer;
-        align-self: end;
-    `;
-    btn.onclick = async () =>
+    const updateProjectionsBtn = document.createElement('button');
+    updateProjectionsBtn.innerText = 'Atualizar';
+    updateProjectionsBtn.style.cssText = btnCss;
+    updateProjectionsBtn.onclick = async () =>
     {
-        echartsContainer.setOption(setupChart(correctedInfos, (await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber))[0].slice(1)), true);
+        echartsContainer.setOption(setupChart(correctedInfos, (
+                await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber)
+            )[0].slice(1)), true);
     };
-    inputDiv.appendChild(btn);
+    inputDiv.appendChild(updateProjectionsBtn);
 
     const titleVars = document.createElement('h6');
     titleVars.innerText = 'Variáveis de projeção';
+    titleVars.style.cssText = `
+        margin: 8px 0;
+        font-size: 14px;
+        text-align: left;
+    `;
     container.parentElement.appendChild(titleVars);
     container.parentElement.appendChild(inputDiv);
 
@@ -757,6 +787,86 @@ const setupEcharts = async (season_id, container) =>
     
     const titleOpts = document.createElement('h6');
     titleOpts.innerText = 'Opções';
+    titleOpts.style.cssText = `
+        margin: 8px 0;
+        font-size: 14px;
+        text-align: left;
+    `;
+
+    const backupBtn = document.createElement('button');
+    backupBtn.innerText = 'Backup';
+    backupBtn.style.cssText = btnCss;
+    backupBtn.onclick = async () =>
+    {
+        const backup = {
+            finance: await finances.toArray(),
+            season: await seasons.toArray(),
+            event: await events.toArray()
+        };
+        const backupStr = JSON.stringify(backup);
+        const backupBlob = new Blob([backupStr], { type: 'text/plain' });
+        const backupUrl = URL.createObjectURL(backupBlob);
+        const backupLink = document.createElement('a');
+        backupLink.href = backupUrl;
+        backupLink.download = `backupDOFinanceTools${serverDateString()}.json`;
+        backupLink.click();
+    };
+
+    const importBtn = document.createElement('button');
+    importBtn.innerText = 'Importar';
+    importBtn.style.cssText = btnCss;
+    importBtn.onclick = async () =>
+    {
+        const f = document.createElement('input');
+        f.type = 'file';
+        f.onchange = (ev) =>
+        {
+            const file = f.files[0];
+            const reader = new FileReader();
+            reader.onload = async () =>
+            {
+                const backup = JSON.parse(reader.result);
+                await finances.bulkPut(backup.finance);
+                await seasons.bulkPut(backup.season);
+                await events.bulkPut(backup.event);
+            };
+            reader.readAsText(file);
+        };
+        f.click();
+    }
+
+    const clearBtn = document.createElement('button');
+    clearBtn.innerText = 'Limpar dados';
+    clearBtn.style.cssText = btnCss;
+    clearBtn.onclick = async () =>
+    {
+        await finances.clear();
+        await seasons.clear();
+        await events.clear();
+        localStorage.removeItem(syncVersionKey);
+        localStorage.removeItem(lastMatchesUpdateKey);
+        localStorage.removeItem(lastTransfersUpdateKey);
+    }
+
+    const updateBtn = document.createElement('button');
+    updateBtn.innerText = 'Atualizar dados';
+    updateBtn.style.cssText = btnCss;
+    updateBtn.onclick = async () =>
+    {
+        localStorage.removeItem(lastMatchesUpdateKey);
+        localStorage.removeItem(lastTransfersUpdateKey);
+
+        const response = await fetch('https://www.dugout-online.com/finances/none/', { method: 'GET' });
+        const dom = parser.parseFromString(await response.text(), 'text/html');
+        await crawlInfos(dom);
+        await crawlMatches(currentSeason, true);
+        await crawlTransfers();
+    }
+
+    optionsDiv.appendChild(updateBtn);
+    optionsDiv.appendChild(clearBtn);
+    optionsDiv.appendChild(backupBtn);
+    optionsDiv.appendChild(importBtn);
 
     container.parentElement.appendChild(titleOpts);
     container.parentElement.appendChild(optionsDiv);
@@ -1092,50 +1202,63 @@ const encodeFinances = async () =>
         if (i >= 0) acc[i] = i > 1 ? numberEncoder(v) : dateEncoder(v);
         return acc;
     }, []));
+    if (!f || !f.length) return '';
     const encoded = JSON.stringify(f).replace(/\"/g, '').replace(/\],\[/g,'|').replace(/(\[\[|\]\])/g, '');
     console.log(`encoded in ${encoded.length} characters (${Math.round(encoded.length * 8 / 1024 * 1000) / 1000} KB)`);
     return encoded;
 }
 
+/**
+ * 
+ * @returns {Promise<string[]>}
+ */
 const decodeFinances = async () =>
 {
-    const response = await fetch("https://www.dugout-online.com/notebook/none", { method: "GET" });
+    if (!options.sync) return [];
+    const response = await fetch('https://www.dugout-online.com/notebook/none', { method: 'GET' });
     const dom = parser.parseFromString(await response.text(), 'text/html');
     const textarea = dom.querySelector('textarea.textfield[name="editedContents"]');
-    if (!textarea)
-    {
-        // message to say sync is only available for premium users
-        return;
-    }
-    const value = textarea.value.split("DOFinanceTools\n=====")[1];
-    if (!value) return;
-    return value.split('|').map(line => line.split(',').map((v, i) => i > 1 ? parseInt(v, 36) : v.split('-').map(d => d === 'null' ? '00:00' : formatNumbers(parseInt(d, 36)).replace('.', '')).join(i === 0 ? '-' : ':')).reduce((acc, value, i) => ({ ...acc, [map[i]]: value }), {}));
+    if (!textarea) return [];
+
+    const notes = textarea.value.split('DOFinanceTools\n=====\n');
+    if (notes.length < 2) return notes;
+
+    const parts = notes[1].split('\n');
+    if (parts.length < 2) return notes;
+    const syncVersion = parts[0];
+    const value = parts[1];
+    return [notes[0], syncVersion, value.split('|').map(line => line.split(',').map((v, i) => i > 1 ? parseInt(v, 36) : v.split('-').map(d => d === 'null' ? '00:00' : formatNumbers(parseInt(d, 36)).replace('.', '')).join(i === 0 ? '-' : ':')).reduce((acc, value, i) => ({ ...acc, [map[i]]: value }), {})), value];
 }
 
-const saveAtNotepad = async (notes) =>
+const saveAtNotepad = async (notes, encoded) =>
 {
-    // const userNotes = current content except DOFinanceTools\n=====
-    // const toSave = userNotes + notes;
+    if (!options.sync) return;
 
-    const response = await fetch("https://www.dugout-online.com/notebook/none", {
-        "body": `savechanges=1&editedContents=${notes}`,
-        method: "POST",
-        mode: "cors",
-        credentials: "include"
+    const syncVersion = serverdate.getTime();
+    localStorage.setItem(syncVersionKey, syncVersion);
+    const body = new FormData();
+    body.append('savechanges', 1);
+    body.append('editedContents', `${notes}[Não escreva abaixo dessa linha] DOFinanceTools\n=====\n${syncVersion}\n${encoded}`);
+    return fetch('https://www.dugout-online.com/notebook/none', {
+        body,
+        method: 'POST',
+        mode: 'same-origin',
+        credentials: 'include'
     });
 }
 
 (async function () {
-    const decoded = await decodeFinances();
-    if (decoded)
+    const [notes, version, decoded, raw] = await decodeFinances();
+    const toSync = options.sync && (version > localStorage.getItem(syncVersionKey) || !localStorage.getItem(syncVersionKey) || !version || raw !== (await encodeFinances()));
+    if (toSync && decoded)
     {
-        // options to enable/disable sync
-        // finances.bulkPut(decoded);
+        console.log('syncing');
+        await finances.bulkPut(decoded);
     }
 
     switch (window.location.pathname) {
         case '/home/none/Free-online-football-manager-game':
-            const response = await fetch("https://www.dugout-online.com/finances/none/", { method: 'GET' });
+            const response = await fetch('https://www.dugout-online.com/finances/none/', { method: 'GET' });
             const dom = parser.parseFromString(await response.text(), 'text/html');
             await crawlInfos(dom);
             await crawlMatches(currentSeason);
@@ -1151,6 +1274,9 @@ const saveAtNotepad = async (notes) =>
             await updateFinanceUI();
             break;
     }
-    const encoded = await encodeFinances();
-    // await saveAtNotepad(encoded);
+    if (toSync)
+    {
+        const encoded = await encodeFinances();
+        if (encoded && encoded !== raw) await saveAtNotepad(notes, encoded);
+    }
 })();
