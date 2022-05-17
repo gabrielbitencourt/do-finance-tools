@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.2
+// @version      1.3
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
