@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.3
+// @version      1.4
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -325,6 +325,18 @@ const crawlTransfers = async () =>
 
 /**
  * 
+ * @param {Finance} a
+ * @param {Finance} b
+ */
+const sortFinances = (a, b) =>
+{
+    if (a.date < b.date) return -1;
+    if (a.date > b.date) return 1;
+    return a.servertime <= b.servertime;
+};
+
+/**
+ * 
  * @param {Finance[]} infos
  * @param {string[]} fields
  * @returns {number[]}
@@ -476,7 +488,6 @@ const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
 {
     // if (infos.length < 7) return [];
     const past = infos.filter(f => f.date <= serverDateString());
-    console.log(past[0])
     const reference = past[past.length - 1];
     
     const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes('-Juvenil]') && m.home === true && !m.friendly).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
@@ -740,7 +751,7 @@ const setupInfos = async (currentSeason, infos) => {
  */
 const setupEcharts = async (season_id, container) =>
 {
-    const infos = await finances.where({ season_id }).toArray();
+    const infos = (await finances.where({ season_id }).toArray()).sort(sortFinances);
     const correctedInfos = correctInfos(infos);
     const projections = await projectFinances(correctedInfos);
     echartsContainer = echarts.init(container)
@@ -861,6 +872,7 @@ const setupEcharts = async (season_id, container) =>
         await crawlInfos(dom);
         await crawlMatches(currentSeason, true);
         await crawlTransfers();
+        if (await sync()) save();
     }
 
     optionsDiv.appendChild(updateBtn);
@@ -1184,7 +1196,7 @@ const updateFinanceUI = async () => {
         seasonContent.id = `tab-${season.id}`;
 
         if (season.id === currentSeason) seasonContent.appendChild(currentSeasonTab);
-        else seasonContent.innerHTML = setupInfos(season.id, await finances.where({ season_id: season.id }).toArray());
+        else seasonContent.innerHTML = setupInfos(season.id, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
         frame.appendChild(seasonContent);
     }
     $(frame).tabs();
@@ -1196,14 +1208,19 @@ const numberEncoder = x => parseInt(x).toString(36);
 
 const encodeFinances = async () =>
 {
-    const f = (await finances.where({ season_id: currentSeason }).toArray()).map(f => Object.entries(f).reduce((acc, [k, v]) =>
-    {
-        const i = map.indexOf(k);
-        if (i >= 0) acc[i] = i > 1 ? numberEncoder(v) : dateEncoder(v);
-        return acc;
-    }, []));
-    if (!f || !f.length) return '';
-    const encoded = JSON.stringify(f).replace(/\"/g, '').replace(/\],\[/g,'|').replace(/(\[\[|\]\])/g, '');
+    const fin = (await finances.where({ season_id: currentSeason }).toArray())
+        .sort(sortFinances)
+        .map((row, rowIndex, rows) => Object
+                    .entries(row)
+                    .reduce((acc, [key, value]) =>
+                    {
+                        const i = map.indexOf(key);
+                        if (key != 'date' && rowIndex > 0 && rows[rowIndex - 1][key] === value) acc[i] = '';
+                        else if (i >= 0) acc[i] = i > 1 ? numberEncoder(value) : dateEncoder(value);
+                        return acc;
+                    }, [])
+        );
+    const encoded = JSON.stringify(fin).replace(/\"/g, '').replace(/\],\[/g,'|').replace(/(\[\[|\]\])/g, '');
     console.log(`encoded in ${encoded.length} characters (${Math.round(encoded.length * 8 / 1024 * 1000) / 1000} KB)`);
     return encoded;
 }
@@ -1227,7 +1244,33 @@ const decodeFinances = async () =>
     if (parts.length < 2) return notes;
     const syncVersion = parts[0];
     const value = parts[1];
-    return [notes[0], syncVersion, value.split('|').map(line => line.split(',').map((v, i) => i > 1 ? parseInt(v, 36) : v.split('-').map(d => d === 'null' ? '00:00' : formatNumbers(parseInt(d, 36)).replace('.', '')).join(i === 0 ? '-' : ':')).reduce((acc, value, i) => ({ ...acc, [map[i]]: value }), {})), value];
+    const mapped = value
+        .split('|')
+        .map(line => line
+            .split(',')
+            .map((v, i) =>
+            {
+                if (v === '') return null;
+                if (i > 1) return parseInt(v, 36);
+                return v.split('-')
+                        .map(d => d === 'null' ? '00:00' : formatNumbers(parseInt(d, 36)).replace('.', ''))
+                        .join(i === 0 ? '-' : ':')
+            })
+            .reduce((acc, value, i) => ({ ...acc, [map[i]]: value }), {})
+        )
+        .map((row, index, rows) =>
+        {
+            for (const key in row) {
+                if (row[key] === null) row[key] = rows[index - 1][key];
+            }
+            return row;
+        });
+    return [
+        notes[0].replace(/\[Não escreva abaixo dessa linha\]/g, ''),
+        syncVersion,
+        mapped,
+        value
+    ];
 }
 
 const saveAtNotepad = async (notes, encoded) =>
@@ -1247,15 +1290,31 @@ const saveAtNotepad = async (notes, encoded) =>
     });
 }
 
-(async function () {
-    const [notes, version, decoded, raw] = await decodeFinances();
+const sync = async () =>
+{
+    const [_, version, decoded, raw] = await decodeFinances();
     const toSync = options.sync && (version > localStorage.getItem(syncVersionKey) || !localStorage.getItem(syncVersionKey) || !version || raw !== (await encodeFinances()));
     if (toSync && decoded)
     {
         console.log('syncing');
+        console.log(decoded);
         await finances.bulkPut(decoded);
+        return true;
     }
+    return false;
+}
 
+const save = async () =>
+{
+    console.log('saving');
+    const [notes, version, _, raw] = await decodeFinances();
+    const encoded = await encodeFinances();
+    if (encoded === raw) localStorage.setItem(syncVersionKey, version);
+    else if (encoded) await saveAtNotepad(notes, encoded);
+}
+
+(async function () {
+    const toSync = await sync();
     switch (window.location.pathname) {
         case '/home/none/Free-online-football-manager-game':
             const response = await fetch('https://www.dugout-online.com/finances/none/', { method: 'GET' });
@@ -1274,9 +1333,5 @@ const saveAtNotepad = async (notes, encoded) =>
             await updateFinanceUI();
             break;
     }
-    if (toSync)
-    {
-        const encoded = await encodeFinances();
-        if (encoded && encoded !== raw) await saveAtNotepad(notes, encoded);
-    }
+    if (toSync) save(toSync);
 })();
