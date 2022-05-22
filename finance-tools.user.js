@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.4
+// @version      1.5
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -871,7 +871,7 @@ const setupEcharts = async (season_id, container) =>
         const dom = parser.parseFromString(await response.text(), 'text/html');
         await crawlInfos(dom);
         await crawlMatches(currentSeason, true);
-        await crawlTransfers();
+        // await crawlTransfers();
         if (await sync()) save();
     }
 
@@ -1315,22 +1315,20 @@ const save = async () =>
 
 (async function () {
     const toSync = await sync();
-    switch (window.location.pathname) {
-        case '/home/none/Free-online-football-manager-game':
+    switch (window.location.pathname.split('/')[0]) {
+        case 'finance':
+            await crawlInfos(document);
+            await crawlMatches(currentSeason);
+            // await crawlTransfers();
+            await updateFinanceUI();
+            break;
+
+        default:
             const response = await fetch('https://www.dugout-online.com/finances/none/', { method: 'GET' });
             const dom = parser.parseFromString(await response.text(), 'text/html');
             await crawlInfos(dom);
             await crawlMatches(currentSeason);
-            await crawlTransfers();
-
-            break;
-
-        default:
-            await crawlInfos(document);
-            await crawlMatches(currentSeason);
-            await crawlTransfers();
-
-            await updateFinanceUI();
+            // await crawlTransfers();
             break;
     }
     if (toSync) save(toSync);
