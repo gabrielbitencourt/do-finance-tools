@@ -13,16 +13,15 @@
 // @updateURL    https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
 
+// CONSTS
+const syncVersionKey = 'DOFinanceTools.syncVersion';
+const lastMatchesUpdateKey = 'DOFinanceTools.lastMatchesUpdate';
+const lastTransfersUpdateKey = 'DOFinanceTools.lastTransfersUpdate';
+const optionsKey = 'DOFinanceTools.options';
 
-let options = JSON.parse(localStorage.getItem('DOFinanceTools.options'));
-if (!options)
-{
-    options = {
-        sync: true,   // sync database between devices with notepad (premium only, non-premium does not have notepad so it won't work)
-        limiter: true // limit the number of requests to the server to once per day to gather transfers and match info (avoids unnecessary requests, only useful for development/debugging)
-    };
-    localStorage.setItem('DOFinanceTools.options', JSON.stringify(options));
-}
+const clubName = document.querySelector('div.header_clubname').innerText;
+const options = JSON.parse(localStorage.getItem(optionsKey)) ?? { sync: true, limiter: true };
+localStorage.setItem(optionsKey, JSON.stringify(options));
 
 const currentSeason = 41;
 const seasonsStarts = {
@@ -54,31 +53,12 @@ const formatter = new Intl.NumberFormat('pt-BR', { minimumIntegerDigits: 2 });
  */
 const db = new Dexie('DOFinanceDatabase');
 db
-    .version(2)
+    .version(4)
     .stores({
         season: '&id',
         finance: '[season_id+date+current]',
         events: '[season_id+date+type+id],type'
     });
-
-db
-    .version(3)
-    .stores({
-        season: '&id',
-        finance: '[season_id+date+current]',
-        events: '[season_id+date+type+id],type'
-    })
-    .upgrade(t =>
-        {
-            return t.events
-                .toCollection()
-                .modify(event =>
-                {
-                    if (event.type !== eventTypes.MATCH) return;
-                    event.friendly = event.name.match(/\[(.*)\]/)[1] === 'Amistoso';
-                    event.home = event.name.indexOf(document.querySelector('div.header_clubname').innerText) < event.name.match(/(vs.|\d?\d:\d?\d)/).index;
-                });
-        });
 
 /** @type {Table} */
 const seasons = db.season;
@@ -91,26 +71,6 @@ const events = db.events;
 
 /** @type {echarts.ECharts} */
 let echartsContainer;
-
-// CONSTS
-const syncVersionKey = 'DOFinanceTools.syncVersion';
-const lastMatchesUpdateKey = 'DOFinanceTools.lastMatchesUpdate';
-const lastTransfersUpdateKey = 'DOFinanceTools.lastTransfersUpdate';
-const btnCss = `
-    text-align: center;
-    background-position: right;
-    padding-right: 4px;
-    padding-left: 4px;
-    margin-right: 4px;
-    color: #393A39;
-    font-weight: bold;
-    border: 1px solid #A4B0A3;
-    background-color: #D5E3D5;
-    -moz-border-radius: 4px 4px 4px 4px;
-    border-radius: 4px 4px 4px 4px;
-    cursor: pointer;
-    align-self: end;
-`;
 
 /**
  * @type {Object.<number, (string | number)[]>}
@@ -188,7 +148,6 @@ const crawlMatches = async (season, past = false) => {
     let year = past ? parseInt(dateRange[0].split('-')[0]) : serverdate.getFullYear();
     let month = past ? parseInt(dateRange[0].split('-')[1]) : serverdate.getMonth() + 1;
 
-    const clubName = document.querySelector('div.header_clubname').innerText;
     const parsers = [
         (el) => {
             const date = el.innerText.trim().split(' ')[1].split('.').reverse().join('-');
@@ -757,6 +716,27 @@ const setupEcharts = async (season_id, container) =>
     echartsContainer = echarts.init(container)
     echartsContainer.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []));
 
+    const titleCss = `
+        margin: 8px 0;
+        font-size: 14px;
+        text-align: left;
+    `;
+    const btnCss = `
+        text-align: center;
+        background-position: right;
+        padding-right: 4px;
+        padding-left: 4px;
+        margin-right: 4px;
+        color: #393A39;
+        font-weight: bold;
+        border: 1px solid #A4B0A3;
+        background-color: #D5E3D5;
+        -moz-border-radius: 4px 4px 4px 4px;
+        border-radius: 4px 4px 4px 4px;
+        cursor: pointer;
+        align-self: end;
+    `;
+
     const inputDiv = document.createElement('div');
     inputDiv.style.display = 'flex';
     inputDiv.style.textAlign = 'left';
@@ -784,11 +764,7 @@ const setupEcharts = async (season_id, container) =>
 
     const titleVars = document.createElement('h6');
     titleVars.innerText = 'Variáveis de projeção';
-    titleVars.style.cssText = `
-        margin: 8px 0;
-        font-size: 14px;
-        text-align: left;
-    `;
+    titleVars.style.cssText = titleCss;
     container.parentElement.appendChild(titleVars);
     container.parentElement.appendChild(inputDiv);
 
@@ -798,11 +774,7 @@ const setupEcharts = async (season_id, container) =>
     
     const titleOpts = document.createElement('h6');
     titleOpts.innerText = 'Opções';
-    titleOpts.style.cssText = `
-        margin: 8px 0;
-        font-size: 14px;
-        text-align: left;
-    `;
+    titleOpts.style.cssText = titleCss;
 
     const backupBtn = document.createElement('button');
     backupBtn.innerText = 'Backup';
@@ -1221,7 +1193,7 @@ const encodeFinances = async () =>
                     }, [])
         );
     const encoded = JSON.stringify(fin).replace(/\"/g, '').replace(/\],\[/g,'|').replace(/(\[\[|\]\])/g, '');
-    console.log(`encoded in ${encoded.length} characters (${Math.round(encoded.length * 8 / 1024 * 1000) / 1000} KB)`);
+    console.log(`encoded in ${encoded.length} characters (${Math.round(encoded.length / 1024 * 1000) / 1000} KB)`);
     return encoded;
 }
 
@@ -1235,7 +1207,12 @@ const decodeFinances = async () =>
     const response = await fetch('https://www.dugout-online.com/notebook/none', { method: 'GET' });
     const dom = parser.parseFromString(await response.text(), 'text/html');
     const textarea = dom.querySelector('textarea.textfield[name="editedContents"]');
-    if (!textarea) return [];
+    if (!textarea)
+    {
+        options.sync = false;
+        localStorage.setItem(optionsKey, JSON.stringify(options));
+        return [];
+    }
 
     const notes = textarea.value.split('DOFinanceTools\n=====\n');
     if (notes.length < 2) return notes;
@@ -1266,7 +1243,7 @@ const decodeFinances = async () =>
             return row;
         });
     return [
-        notes[0].replace(/\[Não escreva abaixo dessa linha\]/g, ''),
+        notes[0].replace(/ *\[Não escreva abaixo dessa linha\]/g, ''),
         syncVersion,
         mapped,
         value
@@ -1292,8 +1269,9 @@ const saveAtNotepad = async (notes, encoded) =>
 
 const sync = async () =>
 {
+    if (!options.sync) return false;
     const [_, version, decoded, raw] = await decodeFinances();
-    const toSync = options.sync && (version > localStorage.getItem(syncVersionKey) || !localStorage.getItem(syncVersionKey) || !version || raw !== (await encodeFinances()));
+    const toSync = version > localStorage.getItem(syncVersionKey) || !localStorage.getItem(syncVersionKey) || !version || raw !== (await encodeFinances());
     if (toSync && decoded)
     {
         console.log('syncing');
@@ -1314,9 +1292,10 @@ const save = async () =>
 }
 
 (async function () {
+    if (!clubName) return;
     const toSync = await sync();
-    switch (window.location.pathname.split('/')[0]) {
-        case 'finance':
+    switch (window.location.pathname.slice(1).split('/')[0]) {
+        case 'finances':
             await crawlInfos(document);
             await crawlMatches(currentSeason);
             // await crawlTransfers();
