@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.5
+// @version      1.6
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -20,7 +20,7 @@ const lastTransfersUpdateKey = 'DOFinanceTools.lastTransfersUpdate';
 const optionsKey = 'DOFinanceTools.options';
 
 const clubName = document.querySelector('div.header_clubname').innerText;
-const options = JSON.parse(localStorage.getItem(optionsKey)) ?? { sync: true, limiter: true };
+const options = JSON.parse(localStorage.getItem(optionsKey)) ?? { sync: true, limiter: true, development: false };
 localStorage.setItem(optionsKey, JSON.stringify(options));
 
 const currentSeason = 41;
@@ -852,8 +852,11 @@ const setupEcharts = async (season_id, container) =>
     optionsDiv.appendChild(backupBtn);
     optionsDiv.appendChild(importBtn);
 
-    container.parentElement.appendChild(titleOpts);
-    container.parentElement.appendChild(optionsDiv);
+    if (options.development)
+    {
+        container.parentElement.appendChild(titleOpts);
+        container.parentElement.appendChild(optionsDiv);
+    }
 }
 
 /**
@@ -884,7 +887,7 @@ const setupChart = (rawData, projections = []) => {
     const patrocinios = data.map((d, i, arr) => i != 0 ? d.sponsor != arr[i - 1].sponsor ? d.sponsor - arr[i - 1].sponsor : undefined : undefined);
     
     const xAxisData = data.map(d => d.date);
-    return {
+    const options = {
         tooltip: {
             trigger: 'axis',
             textStyle: {
@@ -921,10 +924,6 @@ const setupChart = (rawData, projections = []) => {
                 return tooltip.join('<br/>');
             }
         },
-        axisPointer: {
-            type: 'cross',
-            link: { xAxisIndex: 'all' }
-        },
         legend: {
             bottom: 0, width: '100%',
         },
@@ -933,24 +932,19 @@ const setupChart = (rawData, projections = []) => {
                 top: '7%',
                 left: '10%',
                 right: '1%',
-                height: '20%'
-            },
-            {
-                top: '32%',
-                left: '10%',
-                right: '1%',
-                bottom: '10%',
-                height: '46%'
+                height: '71%'
             }
         ],
         xAxis: [
             {
                 type: 'category',
                 gridIndex: 0,
-                axisLabel: { show: false },
                 axisLine: { onZero: false },
                 axisTick: { show: false },
                 data: xAxisData,
+                axisLabel: {
+                    formatter: (value, _) => value.split('-').reverse().join('/')
+                },
                 axisPointer: {
                     type: 'shadow',
                     label: {
@@ -958,42 +952,14 @@ const setupChart = (rawData, projections = []) => {
                         formatter: (params) => params.value.split('-').reverse().join('/')
                     }
                 }
-            },
-            {
-                type: 'category',
-                gridIndex: 1,
-                axisLabel: { show: false },
-                data: xAxisData,
-                axisLabel: {
-                    formatter: (value, _) => value.split('-').reverse().join('/')
-                },
-                axisPointer: {
-                    type: 'shadow'
-                }
             }
         ],
         yAxis: [
             {
                 type: 'value',
-                min: 'dataMin', // Math.floor(d.reduce((acc, f) => f.current < acc ? f.current : acc, d[0].current) / 1000) * 1000,
+                min: 0,         // Math.floor(d.reduce((acc, f) => f.current < acc ? f.current : acc, d[0].current) / 1000) * 1000,
                 max: 'dataMax', // Math.ceil(d.reduce((acc, f) => f.current > acc ? f.current : acc, d[0].current) / 1000) * 1000,
                 gridIndex: 0,
-                splitArea: {
-                    show: true
-                },
-                axisLabel: {
-                    formatter: (value) => formatNumbers(value) + ' £'
-                },
-                axisPointer: {
-                    type: 'line',
-                    label: {
-                        show: true
-                    }
-                }
-            },
-            {
-                type: 'value',
-                gridIndex: 1,
                 axisLabel: {
                     formatter: (value) => formatNumbers(value) + ' £'
                 },
@@ -1008,7 +974,7 @@ const setupChart = (rawData, projections = []) => {
         dataZoom: {
             type: 'slider',
             top: '83%',
-            xAxisIndex: [0, 1],
+            xAxisIndex: [0],
             height: '5%',
             start: 0,
             end: 100
@@ -1020,7 +986,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Despesas',
                 name: 'Salários',
                 color: '#660708',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: transferencias.map(v => v > 0 ? undefined : v * -1),
@@ -1028,7 +994,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Despesas',
                 name: 'Compras',
                 color: '#a4161a',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: contrucoes,
@@ -1036,7 +1002,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Despesas',
                 name: 'Construções',
                 color: '#ba181b',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: manutencao,
@@ -1044,7 +1010,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Despesas',
                 name: 'Manutenção',
                 color: '#e5383b',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: diversos.map(v => v > 0 ? undefined : v * -1),
@@ -1052,7 +1018,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Despesas',
                 name: 'Outras despesas',
                 color: '#EA5D5F',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: patrocinios,
@@ -1060,7 +1026,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Receitas',
                 name: 'Patrocínios',
                 color: '#143601',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: transferencias.map(v => v > 0 ? v : undefined),
@@ -1068,7 +1034,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Receitas',
                 name: 'Vendas',
                 color: '#245501',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: tickets,
@@ -1076,7 +1042,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Receitas',
                 name: 'Bilheterias',
                 color: '#538d22',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: diversos.map(v => v > 0 ? v : undefined),
@@ -1084,7 +1050,7 @@ const setupChart = (rawData, projections = []) => {
                 stack: 'Receitas',
                 name: 'Outras receitas',
                 color: '#73a942',
-                yAxisIndex: 1, xAxisIndex: 1
+                yAxisIndex: 0, xAxisIndex: 0
             },
             {
                 data: [...data.slice(0, data.length - projections.length + 1).map(d => d.current), ...projections.map(_ => undefined)],
@@ -1100,6 +1066,67 @@ const setupChart = (rawData, projections = []) => {
             }
         ]
     };
+    const doubleVision = false;
+    if (doubleVision)
+    {
+        options.axisPointer = {
+            type: 'cross',
+            link: { xAxisIndex: 'all' }
+        };
+
+        options.grid[0].height = '20%',
+        options.grid.push({
+            top: '32%',
+            left: '10%',
+            right: '1%',
+            bottom: '10%',
+            height: '46%'
+        });
+
+        options.xAxis.axisLabel = { show: false };
+        options.xAxis.push({
+            type: 'category',
+            gridIndex: 1,
+            axisLabel: { show: false },
+            data: xAxisData,
+            axisLabel: {
+                formatter: (value, _) => value.split('-').reverse().join('/')
+            },
+            axisPointer: {
+                type: 'shadow'
+            }
+        });
+
+        options.yAxis[0].min = 'dataMin';
+        options.yAxis[0].splitArea = { show: true };
+        options.yAxis.push({
+            type: 'value',
+            gridIndex: 1,
+            axisLabel: {
+                formatter: (value) => formatNumbers(value) + ' £'
+            },
+            axisPointer: {
+                type: 'line',
+                label: {
+                    show: true
+                }
+            }
+        });
+
+        options.dataZoom.xAxisIndex = [0, 1];
+
+        options.series = options.series.map(s =>
+        {
+            if (s.xAxisIndex === 0)
+            {
+                s.xAxisIndex = 1;
+                s.yAxisIndex = 1;
+            }
+            return s;
+        });
+
+    }
+    return options;
 }
 
 const setupInput = (name, value) =>
