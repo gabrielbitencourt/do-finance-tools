@@ -275,7 +275,7 @@ const crawlAllTransfers = async (clubId = 'none') =>
 const crawlTransfers = async () =>
 {
     if (options.limiter && localStorage.getItem(lastTransfersUpdateKey) === serverDateString()) return;
-    const lastDate = (await events.where('type').equals(eventTypes.MATCH).last())?.date;
+    const lastDate = (await events.where('type').equals([eventTypes.BUY, eventTypes.SELL]).last())?.date;
     const buys = [];
     const sells = [];
     
@@ -871,7 +871,7 @@ const setupEcharts = async (season_id, container) =>
         const dom = parser.parseFromString(await response.text(), 'text/html');
         await crawlInfos(dom);
         await crawlMatches(currentSeason, true);
-        await crawlTransfers();
+        // await crawlTransfers();
         if (await sync()) save();
     }
 
@@ -1321,14 +1321,14 @@ const save = async () =>
             const dom = parser.parseFromString(await response.text(), 'text/html');
             await crawlInfos(dom);
             await crawlMatches(currentSeason);
-            await crawlTransfers();
+            // await crawlTransfers();
 
             break;
 
         default:
             await crawlInfos(document);
             await crawlMatches(currentSeason);
-            await crawlTransfers();
+            // await crawlTransfers();
 
             await updateFinanceUI();
             break;
