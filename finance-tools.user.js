@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.7
+// @version      1.8
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -23,18 +23,20 @@ const clubName = document.querySelector('div.header_clubname')?.innerText;
 const options = JSON.parse(localStorage.getItem(optionsKey)) ?? { sync: true, limiter: true };
 localStorage.setItem(optionsKey, JSON.stringify(options));
 
-const currentSeason = 41;
+const currentSeason = 42;
 const seasonsStarts = {
     40: '2021-09-07',
     41: '2022-01-04',
-    42: '2022-05-24'
+    42: '2022-05-24',
+    43: '2022-10-11',
 };
 
 const eventTypes = {
     BUY: 1,
     SELL: 2,
     BUILDING: 4,
-    MATCH: 3
+    MATCH: 3,
+    PENEIRA: 5
 };
 
 /**
@@ -159,10 +161,18 @@ const crawlMatches = async (season, past = false) => {
         },
         (match) => {
             const matchName = match.innerText.trim();
+            if (matchName === `${clubName} está organizando uma peneira`)
+            {
+                return {
+                    type: eventTypes.PENEIRA,
+                    name: `Peneira`,
+                    id: 0
+                }
+            }
             return {
                 name: matchName,
-                friendly: matchName.match(/\[(.*)\]/)[1] === 'Amistoso',
-                home: matchName.indexOf(clubName) < matchName.match(/(vs.|\d?\d:\d?\d)/).index,
+                friendly: (matchName.match(/\[(.*)\]/) ?? [0,0])[1] === 'Amistoso',
+                home: matchName.indexOf(clubName) < matchName.match(/(vs.|\d?\d:\d?\d)/)?.index,
                 link: match.querySelector('a').href,
                 id: parseInt(match.querySelector('a').href.match(/gameid\/(\d*)\//g)[0].split('/')[1])
             };
@@ -487,9 +497,9 @@ const tooltipSpan = (value) => `<span style="float: right; font-weight: bold;">$
 /**
  * 
  * @param {number} currentSeason
- * @param {Finance} infos
+ * @param {Finance[]} infos
  */
-const setupInfos = async (currentSeason, infos) => {
+const setupInfos = (currentSeason, initialBalance, infos) => {
     let template = `
         <center>
             <div class="window_dialog" style="width: 920px; padding: 4px; text-align: center;">
@@ -504,7 +514,7 @@ const setupInfos = async (currentSeason, infos) => {
                                     Saldo inicial :&nbsp;
                                 </td>
                                 <td valign="middle" align="right" width="120" style="font-size: 16px;">&nbsp;
-                                    @saldo_inicial £
+                                    @initial_balance £
                                 </td>
                                 <td valign="middle" align="left" style="font-size: 16px;">&nbsp;</td>
                             </tr>
@@ -696,9 +706,10 @@ const setupInfos = async (currentSeason, infos) => {
         </center>
     `;
     template = template.replace(/\@currentSeason/g, currentSeason);
-    for (const key in infos) {
-        const element = infos[key];
-        template = template.replace(`@${key}`, formatNumbers(element));
+    template = template.replace(/\@initial_balance/g, formatNumbers(initialBalance));
+    for (const key in infos[infos.length - 1]) {
+        const element = infos[infos.length - 1][key];
+        template = template.replace(new RegExp(`@${key} `, 'g'), formatNumbers(element) + ' ');
     }
     return template;
 }
@@ -756,9 +767,8 @@ const setupEcharts = async (season_id, container) =>
     updateProjectionsBtn.style.cssText = btnCss;
     updateProjectionsBtn.onclick = async () =>
     {
-        echartsContainer.setOption(setupChart(correctedInfos, (
-                await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber)
-            )[0].slice(1)), true);
+        const updated = await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber);
+        echartsContainer.setOption(setupChart(correctedInfos, updated[0].slice(1)), true);
     };
     inputDiv.appendChild(updateProjectionsBtn);
 
@@ -1159,7 +1169,7 @@ const updateFinanceUI = async () => {
     /**
      * @type {Season[]}
      */
-    const allSeasons = await seasons.toArray();
+    const allSeasons = (await seasons.toArray()).sort((a, b) => a.id > b.id ? -1 : 1);
     const frame = document.querySelector('.window1_content_inside');
 
     const currentSeasonTab = frame.children[0];
@@ -1196,7 +1206,7 @@ const updateFinanceUI = async () => {
         seasonContent.id = `tab-${season.id}`;
 
         if (season.id === currentSeason) seasonContent.appendChild(currentSeasonTab);
-        else seasonContent.innerHTML = setupInfos(season.id, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
+        else seasonContent.innerHTML = setupInfos(season.id, season.initial_balance, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
         frame.appendChild(seasonContent);
     }
     $(frame).tabs();
