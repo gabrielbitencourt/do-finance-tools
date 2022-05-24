@@ -36,7 +36,7 @@ const eventTypes = {
     SELL: 2,
     BUILDING: 4,
     MATCH: 3,
-    PENEIRA: 5
+    OTHER: 5
 };
 
 /**
@@ -161,21 +161,21 @@ const crawlMatches = async (season, past = false) => {
         },
         (match) => {
             const matchName = match.innerText.trim();
-            if (matchName === `${clubName} está organizando uma peneira`)
-            {
+            try {
                 return {
-                    type: eventTypes.PENEIRA,
-                    name: `Peneira`,
+                    name: matchName,
+                    friendly: (matchName.match(/\[(.*)\]/) ?? [0,0])[1] === 'Amistoso',
+                    home: matchName.indexOf(clubName) < matchName.match(/(vs.|\d?\d:\d?\d)/)?.index,
+                    link: match.querySelector('a').href,
+                    id: parseInt(match.querySelector('a').href.match(/gameid\/(\d*)\//g)[0].split('/')[1])
+                };
+            } catch (error) {
+                return {
+                    type: eventTypes.OTHER,
+                    name: matchName,
                     id: 0
                 }
             }
-            return {
-                name: matchName,
-                friendly: (matchName.match(/\[(.*)\]/) ?? [0,0])[1] === 'Amistoso',
-                home: matchName.indexOf(clubName) < matchName.match(/(vs.|\d?\d:\d?\d)/)?.index,
-                link: match.querySelector('a').href,
-                id: parseInt(match.querySelector('a').href.match(/gameid\/(\d*)\//g)[0].split('/')[1])
-            };
         },
         (_) => ({})
     ];
