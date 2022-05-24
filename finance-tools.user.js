@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.6
+// @version      1.7
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -19,8 +19,8 @@ const lastMatchesUpdateKey = 'DOFinanceTools.lastMatchesUpdate';
 const lastTransfersUpdateKey = 'DOFinanceTools.lastTransfersUpdate';
 const optionsKey = 'DOFinanceTools.options';
 
-const clubName = document.querySelector('div.header_clubname').innerText;
-const options = JSON.parse(localStorage.getItem(optionsKey)) ?? { sync: true, limiter: true, development: false };
+const clubName = document.querySelector('div.header_clubname')?.innerText;
+const options = JSON.parse(localStorage.getItem(optionsKey)) ?? { sync: true, limiter: true };
 localStorage.setItem(optionsKey, JSON.stringify(options));
 
 const currentSeason = 41;
@@ -291,7 +291,7 @@ const sortFinances = (a, b) =>
 {
     if (a.date < b.date) return -1;
     if (a.date > b.date) return 1;
-    return a.servertime <= b.servertime;
+    return a.servertime <= b.servertime ? -1 : 1;
 };
 
 /**
@@ -877,7 +877,7 @@ const setupChart = (rawData, projections = []) => {
     }).concat(projections);
 
     const salarios = data.map((d, i, arr) => i != 0 ? d.total_players_salary + d.total_coaches_salary != arr[i - 1].total_players_salary + arr[i - 1].total_coaches_salary ? (d.current_players_salary + d.current_coaches_salary) : undefined : undefined);
-    const contrucoes = data.map((d, i, arr) => i != 0 ? d.building != arr[i - 1].building ? d.building : undefined : undefined);
+    const contrucoes = data.map((d, i, arr) => i != 0 ? d.building != arr[i - 1].building ? (d.building - arr[i - 1].building) * -1 : undefined : undefined);
     const manutencao = data.map((d, i, arr) => i != 0 ? d.maintenance != arr[i - 1].maintenance ? (d.maintenance - arr[i - 1].maintenance) * -1 : undefined : undefined);
 
     const diversos = data.map((d, i, arr) => i != 0 ? d.others != arr[i - 1].others ? d.others - arr[i - 1].others : undefined : undefined)
@@ -887,6 +887,8 @@ const setupChart = (rawData, projections = []) => {
     const patrocinios = data.map((d, i, arr) => i != 0 ? d.sponsor != arr[i - 1].sponsor ? d.sponsor - arr[i - 1].sponsor : undefined : undefined);
     
     const xAxisData = data.map(d => d.date);
+    // const doubleVision = [...salarios, ...contrucoes, ...manutencao, ...diversos, ...transferencias.map(t => t ? Math.abs(t) : undefined), ...tickets, ...patrocinios].reduce((acc, n) => n > acc ? n : acc, 0) < Math.min(...data.map(d => d.current));
+    const doubleVision = true;
     const options = {
         tooltip: {
             trigger: 'axis',
@@ -901,7 +903,7 @@ const setupChart = (rawData, projections = []) => {
             extraCssText: 'width: 200px;',
             formatter: (params) => {
                 const projection = params[0].dataIndex > data.length - projections.length - 1;
-                if (params[0].axisIndex === 0) params.push(...params.splice(0, 2));
+                if (doubleVision && params[0].axisIndex === 0) params.push(...params.splice(0, 2));
 
                 const despesas = params.slice(0, 5);
                 const tooltip = [];
@@ -1066,7 +1068,6 @@ const setupChart = (rawData, projections = []) => {
             }
         ]
     };
-    const doubleVision = false;
     if (doubleVision)
     {
         options.axisPointer = {
@@ -1220,7 +1221,6 @@ const encodeFinances = async () =>
                     }, [])
         );
     const encoded = JSON.stringify(fin).replace(/\"/g, '').replace(/\],\[/g,'|').replace(/(\[\[|\]\])/g, '');
-    console.log(`encoded in ${encoded.length} characters (${Math.round(encoded.length / 1024 * 1000) / 1000} KB)`);
     return encoded;
 }
 
@@ -1281,6 +1281,7 @@ const saveAtNotepad = async (notes, encoded) =>
 {
     if (!options.sync) return;
 
+    console.log(`saving ${encoded.length} characters (${Math.round(encoded.length / 1024 * 1000) / 1000} KB)`);
     const syncVersion = serverdate.getTime();
     localStorage.setItem(syncVersionKey, syncVersion);
     const body = new FormData();
@@ -1302,7 +1303,6 @@ const sync = async () =>
     if (toSync && decoded)
     {
         console.log('syncing');
-        console.log(decoded);
         await finances.bulkPut(decoded);
         return true;
     }
@@ -1311,7 +1311,6 @@ const sync = async () =>
 
 const save = async () =>
 {
-    console.log('saving');
     const [notes, version, _, raw] = await decodeFinances();
     const encoded = await encodeFinances();
     if (encoded === raw) localStorage.setItem(syncVersionKey, version);
