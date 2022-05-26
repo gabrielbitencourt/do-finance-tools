@@ -8,10 +8,20 @@
 // @require      https://cdn.jsdelivr.net/npm/echarts@5.3.2/dist/echarts.min.js
 // @include      http*dugout-online.com/home/*
 // @include      http*dugout-online.com/finances/*
+// @grant        GM_addStyle
 // @homepage     https://github.com/gabrielbitencourt/do-finance-tools
 // @downloadURL  https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // @updateURL    https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
+
+GM_addStyle(`
+    .ui-tab:hover:not(.ui-state-active) {
+        background-color: #eaf1e8;
+    }
+    .ui-state-active {
+        background-color: #dfe7df;
+    }
+`);
 
 // CONSTS
 const syncVersionKey = 'DOFinanceTools.syncVersion';
@@ -725,7 +735,7 @@ const setupEcharts = async (season_id, container) =>
     const correctedInfos = correctInfos(infos);
     const projections = await projectFinances(correctedInfos);
     echartsContainer = echarts.init(container)
-    echartsContainer.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []));
+    echartsContainer.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []), true);
 
     const titleCss = `
         margin: 8px 0;
@@ -1179,7 +1189,7 @@ const updateFinanceUI = async () => {
     ech.style.width = '910px';
     ech.style.height = '500px';
 
-    currentSeasonTab.appendChild(ech);
+    // currentSeasonTab.appendChild(ech);
     setupEcharts(currentSeason, ech);
 
     frame.removeChild(currentSeasonTab);
@@ -1194,12 +1204,12 @@ const updateFinanceUI = async () => {
         const seasonTab = document.createElement('li');
         seasonTab.style.cssText = `
             list-style: none;
-            border: 1px solid black;
-            width: 90px;
-            border-radius: 5px 5px 0px 0px;
+            border: 1px solid #dfe6de;
+            text-align: center;
+            color: #444444;
             text-align: center;
         `;
-        seasonTab.innerHTML = `<a style="text-decoration: none;" href="#tab-${season.id}">Temporada ${season.id}</a>`;
+        seasonTab.innerHTML = `<a style="text-decoration: none; padding: 8px; display: inline-block;" href="#tab-${season.id}">Temporada ${season.id}</a>`;
         tabs.appendChild(seasonTab);
 
         const seasonContent = document.createElement('div');
@@ -1209,7 +1219,13 @@ const updateFinanceUI = async () => {
         else seasonContent.innerHTML = setupInfos(season.id, season.initial_balance, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
         frame.appendChild(seasonContent);
     }
-    $(frame).tabs();
+    frame.appendChild(ech);
+    $(frame).tabs({
+        activate: (_, ui) => {
+            const season = parseInt(ui.newTab[0].children[0].href.split('#tab-')[1]);
+            // setupEcharts(season, ech);
+        }
+    });
 }
 
 const map = ['date', 'servertime', 'season_id', 'current', 'total_players_salary', 'total_coaches_salary', 'current_players_salary', 'current_coaches_salary', 'building', 'tickets', 'transfers', 'sponsor', 'prizes', 'maintenance', 'others'];
