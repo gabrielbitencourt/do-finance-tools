@@ -14,14 +14,15 @@
 // @updateURL    https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
 
-GM_addStyle(`
-    .ui-tab:hover:not(.ui-state-active) {
-        background-color: #eaf1e8;
-    }
-    .ui-state-active {
-        background-color: #dfe7df;
-    }
-`);
+if (GM_addStyle)
+    GM_addStyle(`
+        .ui-tab:hover:not(.ui-state-active) {
+            background-color: #eaf1e8;
+        }
+        .ui-state-active {
+            background-color: #dfe7df;
+        }
+    `);
 
 // CONSTS
 const syncVersionKey = 'DOFinanceTools.syncVersion';
