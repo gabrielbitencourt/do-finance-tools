@@ -919,7 +919,7 @@ const setupChart = (rawData, projections = []) => {
     
     const xAxisData = data.map(d => d.date);
     // const doubleVision = [...salarios, ...contrucoes, ...manutencao, ...diversos, ...transferencias.map(t => t ? Math.abs(t) : undefined), ...tickets, ...patrocinios].reduce((acc, n) => n > acc ? n : acc, 0) < Math.min(...data.map(d => d.current));
-    const doubleVision = false;
+    const doubleVision = true;
     const options = {
         tooltip: {
             trigger: 'axis',
