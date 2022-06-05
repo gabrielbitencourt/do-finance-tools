@@ -8,10 +8,21 @@
 // @require      https://cdn.jsdelivr.net/npm/echarts@5.3.2/dist/echarts.min.js
 // @include      http*dugout-online.com/home/*
 // @include      http*dugout-online.com/finances/*
+// @grant        GM_addStyle
 // @homepage     https://github.com/gabrielbitencourt/do-finance-tools
 // @downloadURL  https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // @updateURL    https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
+
+if (GM_addStyle)
+    GM_addStyle(`
+        .ui-tab:hover:not(.ui-state-active) {
+            background-color: #eaf1e8;
+        }
+        .ui-state-active {
+            background-color: #dfe7df;
+        }
+    `);
 
 // CONSTS
 const syncVersionKey = 'DOFinanceTools.syncVersion';
@@ -25,7 +36,7 @@ localStorage.setItem(optionsKey, JSON.stringify(options));
 
 const currentSeason = 42;
 const seasonsStarts = {
-    40: '2021-09-07',
+    40: '2021-08-17',
     41: '2022-01-04',
     42: '2022-05-24',
     43: '2022-10-11',
@@ -49,6 +60,7 @@ const eventTypes = {
 
 const parser = new window.DOMParser();
 const formatter = new Intl.NumberFormat('pt-BR', { minimumIntegerDigits: 2 });
+const timezone = Math.round((serverdate.getTime() - new Date().getTime()) / (3600 * 1000)) - (new Date().getTimezoneOffset() / 60);
 
 /**
  * @type {Dexie}
@@ -134,11 +146,13 @@ const crawlInfos = async (dom) => {
     const currentSeason = parseInt(dom.querySelector('div.window_dialog_header').innerText.split(' ')[1]);
     const { initial_balance, ...save } = infos;
     await seasons.put({ initial_balance: initial_balance, id: currentSeason });
+    const serverTime = new Date(serverdate);
+    serverTime.setHours(serverTime.getHours() + timezone);
     await finances.put({
         season_id: currentSeason,
-        date: serverDateString(),
+        date: serverDateString(serverTime),
         current: save.current,
-        servertime: formatNumbers(serverdate.getHours(), true) + ':' + formatNumbers(serverdate.getMinutes(), true),
+        servertime: formatNumbers(serverTime.getHours(), true) + ':' + formatNumbers(serverTime.getMinutes(), true),
         ...save
     });
 }
@@ -389,7 +403,7 @@ const correctInfos = (infos) =>
         }
         const next = infos[index + 1];
         if (info.date === next.date) continue;
-        
+
         const diff = new Date(next.date).getTime() - new Date(info.date).getTime();
         if (diff === 0 || diff === 86400000) corrected.push(info);
         else if (diff > 86400000 && diff % 86400000 === 0)
@@ -702,7 +716,7 @@ const setupInfos = (currentSeason, initialBalance, infos) => {
                     </table>
                 </div>
             </div>
-            <div id="echarts-@currentSeason" style="width: 910px;"></div>
+            <div id="echarts-@currentSeason" style="width: 910px;">Clique para carregar gráfico</div>
         </center>
     `;
     template = template.replace(/\@currentSeason/g, currentSeason);
@@ -723,9 +737,16 @@ const setupEcharts = async (season_id, container) =>
 {
     const infos = (await finances.where({ season_id }).toArray()).sort(sortFinances);
     const correctedInfos = correctInfos(infos);
-    const projections = await projectFinances(correctedInfos);
-    echartsContainer = echarts.init(container)
-    echartsContainer.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []));
+    console.log(infos, correctedInfos);
+    const projections = season_id !== currentSeason ? [] : (await projectFinances(correctedInfos));
+
+    container.style.height = '500px';
+    container.style.width = '910px';
+    const echartsInstance = echarts.init(container);
+    echartsInstance.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []), true);
+
+    if (season_id !== currentSeason) return;
+    echartsContainer = echartsInstance;
 
     const titleCss = `
         margin: 8px 0;
@@ -936,6 +957,18 @@ const setupChart = (rawData, projections = []) => {
                 return tooltip.join('<br/>');
             }
         },
+        // toolbox: {
+        //     feature: {
+        //         myFeature: {
+        //             show: true,
+        //             title: 'Visão',
+        //             icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==',
+        //             onclick: () => {
+        //                 console.log('miau');
+        //             }
+        //         }
+        //     }
+        // },
         legend: {
             bottom: 0, width: '100%',
         },
@@ -1176,8 +1209,6 @@ const updateFinanceUI = async () => {
 
     const ech = document.createElement('div');
     ech.id = `echarts-${currentSeason}`;
-    ech.style.width = '910px';
-    ech.style.height = '500px';
 
     currentSeasonTab.appendChild(ech);
     setupEcharts(currentSeason, ech);
@@ -1194,21 +1225,28 @@ const updateFinanceUI = async () => {
         const seasonTab = document.createElement('li');
         seasonTab.style.cssText = `
             list-style: none;
-            border: 1px solid black;
-            width: 90px;
-            border-radius: 5px 5px 0px 0px;
+            border: 1px solid #dfe6de;
+            text-align: center;
+            color: #444444;
             text-align: center;
         `;
-        seasonTab.innerHTML = `<a style="text-decoration: none;" href="#tab-${season.id}">Temporada ${season.id}</a>`;
+        seasonTab.innerHTML = `<a style="text-decoration: none; padding: 8px; display: inline-block;" href="#tab-${season.id}">Temporada ${season.id}</a>`;
         tabs.appendChild(seasonTab);
 
         const seasonContent = document.createElement('div');
         seasonContent.id = `tab-${season.id}`;
 
         if (season.id === currentSeason) seasonContent.appendChild(currentSeasonTab);
-        else seasonContent.innerHTML = setupInfos(season.id, season.initial_balance, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
+        else
+        {
+            seasonContent.innerHTML = setupInfos(season.id, season.initial_balance, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
+            
+            const click = seasonContent.querySelector(`#echarts-${season.id}`);
+            click.onclick = () => setupEcharts(season.id, click).then();
+        }
         frame.appendChild(seasonContent);
     }
+
     $(frame).tabs();
 }
 
