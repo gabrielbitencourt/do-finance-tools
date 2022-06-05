@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.8
+// @version      1.9
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -36,7 +36,7 @@ localStorage.setItem(optionsKey, JSON.stringify(options));
 
 const currentSeason = 42;
 const seasonsStarts = {
-    40: '2021-09-07',
+    40: '2021-08-17',
     41: '2022-01-04',
     42: '2022-05-24',
     43: '2022-10-11',
@@ -60,6 +60,7 @@ const eventTypes = {
 
 const parser = new window.DOMParser();
 const formatter = new Intl.NumberFormat('pt-BR', { minimumIntegerDigits: 2 });
+const timezone = Math.round((serverdate.getTime() - new Date().getTime()) / (3600 * 1000)) - (new Date().getTimezoneOffset() / 60);
 
 /**
  * @type {Dexie}
@@ -145,11 +146,13 @@ const crawlInfos = async (dom) => {
     const currentSeason = parseInt(dom.querySelector('div.window_dialog_header').innerText.split(' ')[1]);
     const { initial_balance, ...save } = infos;
     await seasons.put({ initial_balance: initial_balance, id: currentSeason });
+    const serverTime = new Date(serverdate);
+    serverTime.setHours(serverTime.getHours() + timezone);
     await finances.put({
         season_id: currentSeason,
-        date: serverDateString(),
+        date: serverDateString(serverTime),
         current: save.current,
-        servertime: formatNumbers(serverdate.getHours(), true) + ':' + formatNumbers(serverdate.getMinutes(), true),
+        servertime: formatNumbers(serverTime.getHours(), true) + ':' + formatNumbers(serverTime.getMinutes(), true),
         ...save
     });
 }
@@ -400,7 +403,7 @@ const correctInfos = (infos) =>
         }
         const next = infos[index + 1];
         if (info.date === next.date) continue;
-        
+
         const diff = new Date(next.date).getTime() - new Date(info.date).getTime();
         if (diff === 0 || diff === 86400000) corrected.push(info);
         else if (diff > 86400000 && diff % 86400000 === 0)
@@ -713,7 +716,7 @@ const setupInfos = (currentSeason, initialBalance, infos) => {
                     </table>
                 </div>
             </div>
-            <div id="echarts-@currentSeason" style="width: 910px;"></div>
+            <div id="echarts-@currentSeason" style="width: 910px;">Clique para carregar gráfico</div>
         </center>
     `;
     template = template.replace(/\@currentSeason/g, currentSeason);
@@ -734,9 +737,16 @@ const setupEcharts = async (season_id, container) =>
 {
     const infos = (await finances.where({ season_id }).toArray()).sort(sortFinances);
     const correctedInfos = correctInfos(infos);
-    const projections = await projectFinances(correctedInfos);
-    echartsContainer = echarts.init(container)
-    echartsContainer.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []), true);
+    console.log(infos, correctedInfos);
+    const projections = season_id !== currentSeason ? [] : (await projectFinances(correctedInfos));
+
+    container.style.height = '500px';
+    container.style.width = '910px';
+    const echartsInstance = echarts.init(container);
+    echartsInstance.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []), true);
+
+    if (season_id !== currentSeason) return;
+    echartsContainer = echartsInstance;
 
     const titleCss = `
         margin: 8px 0;
@@ -909,7 +919,7 @@ const setupChart = (rawData, projections = []) => {
     
     const xAxisData = data.map(d => d.date);
     // const doubleVision = [...salarios, ...contrucoes, ...manutencao, ...diversos, ...transferencias.map(t => t ? Math.abs(t) : undefined), ...tickets, ...patrocinios].reduce((acc, n) => n > acc ? n : acc, 0) < Math.min(...data.map(d => d.current));
-    const doubleVision = true;
+    const doubleVision = false;
     const options = {
         tooltip: {
             trigger: 'axis',
@@ -947,6 +957,18 @@ const setupChart = (rawData, projections = []) => {
                 return tooltip.join('<br/>');
             }
         },
+        // toolbox: {
+        //     feature: {
+        //         myFeature: {
+        //             show: true,
+        //             title: 'Visão',
+        //             icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==',
+        //             onclick: () => {
+        //                 console.log('miau');
+        //             }
+        //         }
+        //     }
+        // },
         legend: {
             bottom: 0, width: '100%',
         },
@@ -1187,10 +1209,8 @@ const updateFinanceUI = async () => {
 
     const ech = document.createElement('div');
     ech.id = `echarts-${currentSeason}`;
-    ech.style.width = '910px';
-    ech.style.height = '500px';
 
-    // currentSeasonTab.appendChild(ech);
+    currentSeasonTab.appendChild(ech);
     setupEcharts(currentSeason, ech);
 
     frame.removeChild(currentSeasonTab);
@@ -1217,16 +1237,17 @@ const updateFinanceUI = async () => {
         seasonContent.id = `tab-${season.id}`;
 
         if (season.id === currentSeason) seasonContent.appendChild(currentSeasonTab);
-        else seasonContent.innerHTML = setupInfos(season.id, season.initial_balance, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
+        else
+        {
+            seasonContent.innerHTML = setupInfos(season.id, season.initial_balance, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
+            
+            const click = seasonContent.querySelector(`#echarts-${season.id}`);
+            click.onclick = () => setupEcharts(season.id, click).then();
+        }
         frame.appendChild(seasonContent);
     }
-    frame.appendChild(ech);
-    $(frame).tabs({
-        activate: (_, ui) => {
-            const season = parseInt(ui.newTab[0].children[0].href.split('#tab-')[1]);
-            // setupEcharts(season, ech);
-        }
-    });
+
+    $(frame).tabs();
 }
 
 const map = ['date', 'servertime', 'season_id', 'current', 'total_players_salary', 'total_coaches_salary', 'current_players_salary', 'current_coaches_salary', 'building', 'tickets', 'transfers', 'sponsor', 'prizes', 'maintenance', 'others'];
