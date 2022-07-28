@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DOFinanceTools
-// @version      1.10
+// @version      1.11
 // @description  Better finance visualization for dugout-online
 // @author       Gabriel Bitencourt
 // @require      https://unpkg.com/dexie/dist/dexie.min.js
@@ -13,6 +13,28 @@
 // @downloadURL  https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // @updateURL    https://github.com/gabrielbitencourt/do-finance-tools/raw/main/finance-tools.user.js
 // ==/UserScript==
+
+const translations = {
+    default: {
+        // you can edit the translations below to your own language (just the text between the '')
+        daily_sponsor: 'Daily sponsor',
+        home_tickets: 'Home tickets',
+        friendly_tickets: 'Friendlies tickets',
+        monday_expenses: 'Monday expenses',
+        projection: 'Projection!<br/>(Based on averages)'
+    },
+    // I do not recommend you to change the translations below, do it at your own risk
+    PT: { friendly: 'Amistoso', youth: 'Juvenil', daily_sponsor: 'Patrocínio diário', home_tickets: 'Bilheteria em casa', friendly_tickets: 'Bilheteria amistosos', monday_expenses: 'Despesas de segunda', projection: 'Projeção!<br/>(Baseado nas médias coletadas)' },
+    EN: { friendly: 'Friendly match', youth: 'youth' },
+    BH: { friendly: 'Prijateljske utakmice', youth: 'mladi' },
+    SP: { friendly: 'Partido amistoso', youth: 'juveniles' },
+    IT: { friendly: 'Amichevole', youth: 'Primavera' },
+    DU: { friendly: 'Vriendschappelijke wedstrijd', youth: 'jeugd' },
+    RO: { friendly: 'Amical', youth: 'Tineret' },
+    SI: { friendly: 'Prijateljska tekma', youth: 'mladinci' },
+    TU: { friendly: 'Hazırlık maçı', youth: 'Paf' },
+    SK: { friendly: '친선 경기', youth: '유소년' }
+};
 
 if (GM_addStyle)
     GM_addStyle(`
@@ -103,6 +125,20 @@ const indexes = {
     22: ['current', 23],
 }
 
+const getLanguage = async () =>
+{
+    const response = await fetch('https://www.dugout-online.com/settings/none', { method: 'GET' });
+    const dom = parser.parseFromString(await response.text(), 'text/html');
+    const selectLanguage = dom.evaluate('/html/body/div[2]/div/form/div/div/div[1]/center/table/tbody/tr[12]/td[2]/select', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    localStorage.setItem(optionsKey, { ...options, language: selectLanguage.value });
+    return selectLanguage.value;
+}
+
+const getTranslation = (key, ln = options.language) =>
+{
+    return translations[ln][key] ?? translations.default[key];
+}
+
 /**
  * 
  * @param {string} n
@@ -178,7 +214,7 @@ const crawlMatches = async (season, past = false) => {
             try {
                 return {
                     name: matchName,
-                    friendly: (matchName.match(/\[(.*)\]/) ?? [0,0])[1] === 'Amistoso',
+                    friendly: (matchName.match(/\[(.*)\]/) ?? [0,0])[1] === getTranslation('friendly'),
                     home: matchName.indexOf(clubName) < matchName.match(/(vs.|\d?\d:\d?\d)/)?.index,
                     link: match.querySelector('a').href,
                     id: parseInt(match.querySelector('a').href.match(/gameid\/(\d*)\//g)[0].split('/')[1])
@@ -208,102 +244,6 @@ const crawlMatches = async (season, past = false) => {
     }
     await events.bulkPut(matches);
     localStorage.setItem(lastMatchesUpdateKey, serverDateString());
-};
-
-const crawlAllTransfers = async (clubId = 'none') =>
-{
-    const buys = [];
-    const sells = [];
-
-    const parsers = [
-        (position) => ({ position: position.innerText.trim() }),
-        (player) => ({ name: player.innerText.trim(), link: player.querySelector('a').href, id: parseInt(player.querySelector('a').href.split('/').reverse()[0]) }),
-        (team) => ({ team: team.innerText.trim() }),
-        (el, type) => {
-            const date = el.innerText.trim().split('.').reverse().join('-');
-            return {
-                date,
-                type,
-                season_id: parseInt(Object.entries(seasonsStarts).find(([_, v], index, entries) => date >= v && (index === entries.length - 1 || date < entries[index + 1][1]))[0])
-            };
-        },
-        (price) => ({ price: parseInt(price.innerText.trim().split(' ')[0].replace(/\./, '')) })
-    ];
-
-    const pageBuys = fetch(`https://www.dugout-online.com/clubinfo/transfers/clubid/${clubId}/typ/1/pg/1`, { method: 'GET' }).then(res => ({ res, type: eventTypes.BUY }));
-    const pageSells = fetch(`https://www.dugout-online.com/clubinfo/transfers/clubid/${clubId}/typ/2/pg/1`, { method: 'GET' }).then(res => ({ res, type: eventTypes.SELL }));
-
-    const pagesLeft = [];
-    for (const page of await Promise.all([pageBuys, pageSells])) {
-        pagesLeft.push(...[...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => fetch(el.getAttribute('onclick').split('\'')[1], {}).then(res => ({ res, type: page.type }))));
-
-        const dom = parser.parseFromString(await page.res.text(), 'text/html');
-        const transfers = [...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {}));
-
-        if (page.type === eventTypes.BUY) buys.push(...transfers);
-        else sells.push(...transfers);
-    }
-
-    for (const pageLeft of await Promise.all(pagesLeft))
-    {
-        const dom = parser.parseFromString(await pageLeft.res.text(), 'text/html');
-        const transfers = [...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {}));
-
-        if (page.type === eventTypes.BUY) buys.push(...transfers);
-        else sells.push(...transfers);
-    }
-    return [...buys, ...sells];
-};
-
-const crawlTransfers = async () =>
-{
-    if (options.limiter && localStorage.getItem(lastTransfersUpdateKey) === serverDateString()) return;
-    const lastDate = (await events.where('type').equals([eventTypes.BUY, eventTypes.SELL]).last())?.date;
-    const buys = [];
-    const sells = [];
-    
-    const parsers = [
-        (position) => ({ position: position.innerText.trim() }),
-        (player) => ({ name: player.innerText.trim(), link: player.querySelector('a').href, id: parseInt(player.querySelector('a').href.split('/').reverse()[0]) }),
-        (team) => ({ team: team.innerText.trim() }),
-        (el, type) => {
-            const date = el.innerText.trim().split('.').reverse().join('-');
-            return {
-                date,
-                type,
-                season_id: parseInt(Object.entries(seasonsStarts).find(([_, v], index, entries) => date >= v && (index === entries.length - 1 || date < entries[index + 1][1]))[0])
-            };
-        },
-        (price) => ({ price: parseInt(price.innerText.trim().split(' ')[0].replace(/\./, '')) })
-    ];
-
-    let page = `https://www.dugout-online.com/clubinfo/transfers/clubid/none/typ/1/pg/1`;
-    let pagesLeft;
-    do
-    {
-        response = await fetch(page, { method: 'GET' });
-        dom = parser.parseFromString(await response.text(), 'text/html');
-
-        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.getAttribute('onclick').split('\'')[1]).reverse()
-
-        buys.push(...[...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {})));
-        page = pagesLeft.pop();
-    } while (page && (!lastDate || buys[buys.length - 1].date <= lastDate));
-
-    pagesLeft = undefined;
-    page = `https://www.dugout-online.com/clubinfo/transfers/clubid/none/typ/2/pg/1`;
-    do
-    {
-        response = await fetch(page, { method: 'GET' });
-        dom = parser.parseFromString(await response.text(), 'text/html');
-        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.getAttribute('onclick').split('\'')[1]).reverse()
-
-        sells.push(...[...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.SELL : undefined) }), {})));
-        page = pagesLeft.pop()
-    } while (page && (!lastDate || sells[sells.length - 1].date <= lastDate));
-
-    localStorage.setItem(lastTransfersUpdateKey, serverDateString());
-    await events.bulkPut([...buys, ...sells]);
 };
 
 /**
@@ -473,7 +413,7 @@ const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
     const past = infos.filter(f => f.date <= serverDateString());
     const reference = past[past.length - 1];
     
-    const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes('-Juvenil]') && m.home === true && !m.friendly).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
+    const futureMatchesDates = (await events.where({ season_id: currentSeason, type: eventTypes.MATCH }).filter(m => m.date >= serverDateString()).toArray()).filter(m => !m.name.includes(getTranslation('youth')) && m.home === true && !m.friendly).map(m => m.date).reduce((acc, date) => ({ ...acc, [date]: true }), {});
     const dailySponsor = sponsor ? sponsor : getDailySponsor(past);
     const averageHomeTickets = !isNaN(home) ? home : getAverageTickets(past, false);
     const averageFriendliesTickets = !isNaN(friendlies) ? friendlies : getAverageTickets(past, true);
@@ -773,10 +713,10 @@ const setupEcharts = async (season_id, container) =>
     inputDiv.style.display = 'flex';
     inputDiv.style.textAlign = 'left';
 
-    const sponsorInput = setupInput('Patrocínio diário', projections[1]);
-    const ticketsInput = setupInput('Bilheteria em casa', projections[2]);
-    const friendliesInput = setupInput('Bilheteria amistosos', projections[3]);
-    const mondayInput = setupInput('Despesas de segunda', projections[4]);
+    const sponsorInput = setupInput(getTranslation('daily_sponsor'), projections[1]);
+    const ticketsInput = setupInput(getTranslation('home_tickets'), projections[2]);
+    const friendliesInput = setupInput(getTranslation('friendly_tickets'), projections[3]);
+    const mondayInput = setupInput(getTranslation('monday_expenses'), projections[4]);
 
     inputDiv.appendChild(sponsorInput);
     inputDiv.appendChild(ticketsInput);
@@ -870,6 +810,8 @@ const setupEcharts = async (season_id, container) =>
         localStorage.removeItem(lastMatchesUpdateKey);
         localStorage.removeItem(lastTransfersUpdateKey);
 
+        options.language = await getLanguage();
+
         const response = await fetch('https://www.dugout-online.com/finances/none/', { method: 'GET' });
         const dom = parser.parseFromString(await response.text(), 'text/html');
         await crawlInfos(dom);
@@ -938,22 +880,22 @@ const setupChart = (rawData, projections = []) => {
 
                 const despesas = params.slice(0, 5);
                 const tooltip = [];
-                if (projection) tooltip.push(`<div style="font-size: 11px; font-weight: bold;">Projeção!<br/>(Baseado nas médias coletadas)</div>`);
+                if (projection) tooltip.push(`<div style="font-size: 11px; font-weight: bold;">${getTranslation('projection')}</div>`);
                 for (const param of despesas) {
                     if (param.data) tooltip.push(`${param.marker}${param.seriesName}: ${tooltipSpan(formatNumbers(param.data))}`);
                 }
                 const totalDespesas = despesas.reduce((a, b) => a + (isNaN(b.data) ? 0 : b.data), 0);
-                tooltip.push(`${despesas.some(r => !isNaN(r.data)) ? '<hr size=1 style="margin: 3px 0">' : ''}${marker('red')}Total de despesas: ${tooltipSpan(formatNumbers(totalDespesas))}<br/>`);
+                tooltip.push(`${despesas.some(r => !isNaN(r.data)) ? '<hr size=1 style="margin: 3px 0">' : ''}${marker('red')}(-): ${tooltipSpan(formatNumbers(totalDespesas))}<br/>`);
 
                 const receitas = params.slice(5, 9);
                 for (const param of receitas) {
                     if (param.data) tooltip.push(`${param.marker}${param.seriesName}: ${tooltipSpan(formatNumbers(param.data))}`);
                 }
                 const totalReceitas = receitas.reduce((a, b) => a + (isNaN(b.data) ? 0 : b.data), 0);
-                tooltip.push(`${receitas.some(r => !isNaN(r.data)) ? '<hr size=1 style="margin: 3px 0">' : ''}${marker('green')}Total de receitas: ${tooltipSpan(formatNumbers(totalReceitas))}<br/>`);
+                tooltip.push(`${receitas.some(r => !isNaN(r.data)) ? '<hr size=1 style="margin: 3px 0">' : ''}${marker('green')}(+): ${tooltipSpan(formatNumbers(totalReceitas))}<br/>`);
 
                 tooltip.push(`${params[!projection ? 9 : 10].marker}${params[!projection ? 9 : 10].seriesName}: ${tooltipSpan(formatNumbers(params[!projection ? 9 : 10].data))}`);
-                tooltip.push(`${totalReceitas === totalDespesas ? params[!projection ? 9 : 10].marker : totalReceitas - totalDespesas > 0 ? marker('green') : marker('red')}${!projection ? 'Variação' : 'Projeção'} do dia: ${tooltipSpan(formatNumbers(totalReceitas - totalDespesas))}`);
+                tooltip.push(`${totalReceitas === totalDespesas ? params[!projection ? 9 : 10].marker : totalReceitas - totalDespesas > 0 ? marker('green') : marker('red')}(+/-): ${tooltipSpan(formatNumbers(totalReceitas - totalDespesas))}`);
                 return tooltip.join('<br/>');
             }
         },
@@ -1367,12 +1309,13 @@ const save = async () =>
 
 (async function () {
     if (!clubName) return;
+    if (!options.language) options.language = await getLanguage();
+
     const toSync = await sync();
     switch (window.location.pathname.slice(1).split('/')[0]) {
         case 'finances':
             await crawlInfos(document);
             await crawlMatches(currentSeason);
-            // await crawlTransfers();
             await updateFinanceUI();
             break;
 
@@ -1381,7 +1324,6 @@ const save = async () =>
             const dom = parser.parseFromString(await response.text(), 'text/html');
             await crawlInfos(dom);
             await crawlMatches(currentSeason);
-            // await crawlTransfers();
             break;
     }
     if (toSync) save(toSync);
