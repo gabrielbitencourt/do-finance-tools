@@ -34,13 +34,7 @@ const clubName = document.querySelector('div.header_clubname')?.innerText;
 const options = JSON.parse(localStorage.getItem(optionsKey)) ?? { sync: true, limiter: true };
 localStorage.setItem(optionsKey, JSON.stringify(options));
 
-const currentSeason = 42;
-const seasonsStarts = {
-    40: '2021-08-17',
-    41: '2022-01-04',
-    42: '2022-05-24',
-    43: '2022-10-11',
-};
+const season40Start = '2021-08-17';
 
 const eventTypes = {
     BUY: 1,
@@ -125,6 +119,13 @@ const countMondays = (d0, d1) => {
     return Math.floor((ndays + (d0.getDay() + 6 - weekday) % 7) / 7)
 }
 
+const seasonStart = (season) =>
+{
+    const seasonStartDate = new Date(seasonsStarts[40]);
+    const utc = Date.UTC(seasonStartDate.getFullYear(), seasonStartDate.getMonth(), seasonStartDate.getDate()) + (140 * (season - 40) * MS_PER_DAY) + MS_PER_DAY;
+    return new Date(utc).toISOString().split('T')[0];
+}
+
 /**
  * 
  * @param {Document} dom 
@@ -160,7 +161,9 @@ const crawlInfos = async (dom) => {
 const crawlMatches = async (season, past = false) => {
     if (options.limiter && localStorage.getItem(lastMatchesUpdateKey) === serverDateString()) return;
 
-    const dateRange = [seasonsStarts[season], seasonsStarts[season + 1]];
+    const seasonStartDate = seasonStart(season);
+    const nextSeasonStartDate = seasonStart(season + 1);
+    const dateRange = [seasonStartDate, nextSeasonStartDate];
     let year = past ? parseInt(dateRange[0].split('-')[0]) : serverdate.getFullYear();
     let month = past ? parseInt(dateRange[0].split('-')[1]) : serverdate.getMonth() + 1;
 
@@ -169,7 +172,7 @@ const crawlMatches = async (season, past = false) => {
             const date = el.innerText.trim().split(' ')[1].split('.').reverse().join('-');
             return {
                 date: date,
-                season_id: date < seasonsStarts[season] ? season - 1 : date > seasonsStarts[season + 1] ? season + 1 : season,
+                season_id: date < seasonStartDate ? season - 1 : date > nextSeasonStartDate ? season + 1 : season,
                 type: eventTypes.MATCH
             };
         },
@@ -208,102 +211,6 @@ const crawlMatches = async (season, past = false) => {
     }
     await events.bulkPut(matches);
     localStorage.setItem(lastMatchesUpdateKey, serverDateString());
-};
-
-const crawlAllTransfers = async (clubId = 'none') =>
-{
-    const buys = [];
-    const sells = [];
-
-    const parsers = [
-        (position) => ({ position: position.innerText.trim() }),
-        (player) => ({ name: player.innerText.trim(), link: player.querySelector('a').href, id: parseInt(player.querySelector('a').href.split('/').reverse()[0]) }),
-        (team) => ({ team: team.innerText.trim() }),
-        (el, type) => {
-            const date = el.innerText.trim().split('.').reverse().join('-');
-            return {
-                date,
-                type,
-                season_id: parseInt(Object.entries(seasonsStarts).find(([_, v], index, entries) => date >= v && (index === entries.length - 1 || date < entries[index + 1][1]))[0])
-            };
-        },
-        (price) => ({ price: parseInt(price.innerText.trim().split(' ')[0].replace(/\./, '')) })
-    ];
-
-    const pageBuys = fetch(`https://www.dugout-online.com/clubinfo/transfers/clubid/${clubId}/typ/1/pg/1`, { method: 'GET' }).then(res => ({ res, type: eventTypes.BUY }));
-    const pageSells = fetch(`https://www.dugout-online.com/clubinfo/transfers/clubid/${clubId}/typ/2/pg/1`, { method: 'GET' }).then(res => ({ res, type: eventTypes.SELL }));
-
-    const pagesLeft = [];
-    for (const page of await Promise.all([pageBuys, pageSells])) {
-        pagesLeft.push(...[...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => fetch(el.getAttribute('onclick').split('\'')[1], {}).then(res => ({ res, type: page.type }))));
-
-        const dom = parser.parseFromString(await page.res.text(), 'text/html');
-        const transfers = [...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {}));
-
-        if (page.type === eventTypes.BUY) buys.push(...transfers);
-        else sells.push(...transfers);
-    }
-
-    for (const pageLeft of await Promise.all(pagesLeft))
-    {
-        const dom = parser.parseFromString(await pageLeft.res.text(), 'text/html');
-        const transfers = [...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {}));
-
-        if (page.type === eventTypes.BUY) buys.push(...transfers);
-        else sells.push(...transfers);
-    }
-    return [...buys, ...sells];
-};
-
-const crawlTransfers = async () =>
-{
-    if (options.limiter && localStorage.getItem(lastTransfersUpdateKey) === serverDateString()) return;
-    const lastDate = (await events.where('type').equals([eventTypes.BUY, eventTypes.SELL]).last())?.date;
-    const buys = [];
-    const sells = [];
-    
-    const parsers = [
-        (position) => ({ position: position.innerText.trim() }),
-        (player) => ({ name: player.innerText.trim(), link: player.querySelector('a').href, id: parseInt(player.querySelector('a').href.split('/').reverse()[0]) }),
-        (team) => ({ team: team.innerText.trim() }),
-        (el, type) => {
-            const date = el.innerText.trim().split('.').reverse().join('-');
-            return {
-                date,
-                type,
-                season_id: parseInt(Object.entries(seasonsStarts).find(([_, v], index, entries) => date >= v && (index === entries.length - 1 || date < entries[index + 1][1]))[0])
-            };
-        },
-        (price) => ({ price: parseInt(price.innerText.trim().split(' ')[0].replace(/\./, '')) })
-    ];
-
-    let page = `https://www.dugout-online.com/clubinfo/transfers/clubid/none/typ/1/pg/1`;
-    let pagesLeft;
-    do
-    {
-        response = await fetch(page, { method: 'GET' });
-        dom = parser.parseFromString(await response.text(), 'text/html');
-
-        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.getAttribute('onclick').split('\'')[1]).reverse()
-
-        buys.push(...[...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.BUY : undefined) }), {})));
-        page = pagesLeft.pop();
-    } while (page && (!lastDate || buys[buys.length - 1].date <= lastDate));
-
-    pagesLeft = undefined;
-    page = `https://www.dugout-online.com/clubinfo/transfers/clubid/none/typ/2/pg/1`;
-    do
-    {
-        response = await fetch(page, { method: 'GET' });
-        dom = parser.parseFromString(await response.text(), 'text/html');
-        if (!pagesLeft) pagesLeft = [...dom.querySelectorAll('.pages_on ~ .pages_off')].map(el => el.getAttribute('onclick').split('\'')[1]).reverse()
-
-        sells.push(...[...dom.querySelector('tr.table_top_row').parentElement.children].slice(1).map(el => [...el.querySelectorAll('td')].reduce((acc, td, i) => ({ ...acc, ...parsers[i](td, i === 3 ? eventTypes.SELL : undefined) }), {})));
-        page = pagesLeft.pop()
-    } while (page && (!lastDate || sells[sells.length - 1].date <= lastDate));
-
-    localStorage.setItem(lastTransfersUpdateKey, serverDateString());
-    await events.bulkPut([...buys, ...sells]);
 };
 
 /**
@@ -467,7 +374,7 @@ const correctInfos = (infos) =>
  * @param {Finance[]} infos
  * @return {Finance[]}
  */
-const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
+const projectFinances = async (currentSeason, infos, sponsor, friendlies, home, monday) =>
 {
     // if (infos.length < 7) return [];
     const past = infos.filter(f => f.date <= serverDateString());
@@ -481,7 +388,8 @@ const projectFinances = async (infos, sponsor, friendlies, home, monday) =>
 
     const future = [];
     const day = new Date(serverDateString() + 'T00:00:00');
-    while (serverDateString(day) < seasonsStarts[currentSeason + 1])
+    const nextSeasonStartDate = seasonStart(currentSeason + 1);
+    while (serverDateString(day) < nextSeasonStartDate)
     {
         const last = future.length ? future[future.length - 1] : reference;
         future.push({
@@ -730,22 +638,23 @@ const setupInfos = (currentSeason, initialBalance, infos) => {
 
 /**
  * 
+ * @param {number} forSeason
  * @param {number} season_id
  * @param {HTMLDivElement} container 
  */
-const setupEcharts = async (season_id, container) =>
+const setupEcharts = async (forSeason, currentSeason, container) =>
 {
-    const infos = (await finances.where({ season_id }).toArray()).sort(sortFinances);
+    const infos = (await finances.where({ season_id: forSeason }).toArray()).sort(sortFinances);
     const correctedInfos = correctInfos(infos);
     console.log(infos, correctedInfos);
-    const projections = season_id !== currentSeason ? [] : (await projectFinances(correctedInfos));
+    const projections = forSeason !== currentSeason ? [] : (await projectFinances(forSeason, correctedInfos));
 
     container.style.height = '500px';
     container.style.width = '910px';
     const echartsInstance = echarts.init(container);
     echartsInstance.setOption(setupChart(correctedInfos, projections.length ? projections[0].slice(1) : []), true);
 
-    if (season_id !== currentSeason) return;
+    if (forSeason !== currentSeason) return;
     echartsContainer = echartsInstance;
 
     const titleCss = `
@@ -788,7 +697,7 @@ const setupEcharts = async (season_id, container) =>
     updateProjectionsBtn.style.cssText = btnCss;
     updateProjectionsBtn.onclick = async () =>
     {
-        const updated = await projectFinances(correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber);
+        const updated = await projectFinances(forSeason, correctedInfos, sponsorInput.lastElementChild.valueAsNumber, friendliesInput.lastElementChild.valueAsNumber, ticketsInput.lastElementChild.valueAsNumber, mondayInput.lastElementChild.valueAsNumber);
         echartsContainer.setOption(setupChart(correctedInfos, updated[0].slice(1)), true);
     };
     inputDiv.appendChild(updateProjectionsBtn);
@@ -875,7 +784,7 @@ const setupEcharts = async (season_id, container) =>
         await crawlInfos(dom);
         await crawlMatches(currentSeason, true);
         // await crawlTransfers();
-        if (await sync()) save();
+        if (await sync(forSeason)) save(forSeason);
     }
 
     optionsDiv.appendChild(updateBtn);
@@ -1211,7 +1120,7 @@ const updateFinanceUI = async () => {
     ech.id = `echarts-${currentSeason}`;
 
     currentSeasonTab.appendChild(ech);
-    setupEcharts(currentSeason, ech);
+    setupEcharts(currentSeason, currentSeason, ech);
 
     frame.removeChild(currentSeasonTab);
 
@@ -1242,7 +1151,7 @@ const updateFinanceUI = async () => {
             seasonContent.innerHTML = setupInfos(season.id, season.initial_balance, (await finances.where({ season_id: season.id }).toArray()).sort(sortFinances)); // fix: não é sort, é filtro/realocacao de repeticoes
             
             const click = seasonContent.querySelector(`#echarts-${season.id}`);
-            click.onclick = () => setupEcharts(season.id, click).then();
+            click.onclick = () => setupEcharts(season.id, currentSeason, click).then();
         }
         frame.appendChild(seasonContent);
     }
@@ -1254,9 +1163,9 @@ const map = ['date', 'servertime', 'season_id', 'current', 'total_players_salary
 const dateEncoder = x => x.replace(':', '-').split('-').map(m => parseInt(m).toString(36)).join('-');
 const numberEncoder = x => parseInt(x).toString(36);
 
-const encodeFinances = async () =>
+const encodeFinances = async (season_id) =>
 {
-    const fin = (await finances.where({ season_id: currentSeason }).toArray())
+    const fin = (await finances.where({ season_id }).toArray())
         .sort(sortFinances)
         .map((row, rowIndex, rows) => Object
                     .entries(row)
@@ -1343,7 +1252,7 @@ const saveAtNotepad = async (notes, encoded) =>
     });
 }
 
-const sync = async () =>
+const sync = async (season_id) =>
 {
     if (!options.sync) return false;
     const [_, version, decoded, raw] = await decodeFinances();
@@ -1357,22 +1266,22 @@ const sync = async () =>
     return false;
 }
 
-const save = async () =>
+const save = async (season_id) =>
 {
     const [notes, version, _, raw] = await decodeFinances();
-    const encoded = await encodeFinances();
+    const encoded = await encodeFinances(season_id);
     if (encoded === raw) localStorage.setItem(syncVersionKey, version);
     else if (encoded) await saveAtNotepad(notes, encoded);
 }
 
 (async function () {
+    const currentSeason = 42;
     if (!clubName) return;
-    const toSync = await sync();
+    const toSync = await sync(currentSeason);
     switch (window.location.pathname.slice(1).split('/')[0]) {
         case 'finances':
             await crawlInfos(document);
             await crawlMatches(currentSeason);
-            // await crawlTransfers();
             await updateFinanceUI();
             break;
 
@@ -1381,8 +1290,7 @@ const save = async () =>
             const dom = parser.parseFromString(await response.text(), 'text/html');
             await crawlInfos(dom);
             await crawlMatches(currentSeason);
-            // await crawlTransfers();
             break;
     }
-    if (toSync) save(toSync);
+    if (toSync) save(currentSeason);
 })();
